@@ -1,5 +1,20 @@
 {
+  "name": "brz-ntt-bridge-service",
+  "version": "1.0.0",
+  "description": "BRZ Native Token Transfer Bridge Service using Wormhole NTT",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "ts-node src/server.ts",
+    "watch": "nodemon --watch src --ext ts --exec ts-node src/server.ts"
+  },
   "devDependencies": {
+    "@types/cors": "^2.8.13",
+    "@types/express": "^4.17.17",
+    "@types/node": "^20.4.5",
+    "nodemon": "^3.0.1",
+    "ts-node": "^10.9.1",
     "typescript": "^5.5.4"
   },
   "dependencies": {
@@ -10,7 +25,9 @@
     "@wormhole-foundation/sdk-evm-ntt": "^0.8.0",
     "@wormhole-foundation/sdk-route-ntt": "^0.8.0",
     "@wormhole-foundation/sdk-solana-ntt": "^0.8.0",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "express": "^4.18.2",
     "rpc-websockets": "7.11.0"
   }
 }
