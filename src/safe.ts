@@ -68,6 +68,161 @@ export async function proposeTransaction(
     return { safeTxHash, txHash };
 };
 
+export async function proposeTransactionOnly(
+    chainId: number,
+    safeAddress: string,
+    toAddress: string,
+    value: string,
+    callData: string,
+    signerWallet: Wallet,
+    rpcUrl: string
+): Promise<string> {
+    const apiKit = getSafeApiKit(chainId);
+
+    const protocolKitOwner = await Safe.init({
+        provider: rpcUrl,
+        signer: signerWallet.privateKey,
+        safeAddress: safeAddress
+    });
+
+    const safeTransactionData: MetaTransactionData = {
+        to: toAddress,
+        value: value,
+        data: callData,
+        operation: OperationType.Call
+    };
+
+    let safeTxHash: string;
+
+    // Check if transaction with same data already exists
+    const pendingTransactions = await apiKit.getPendingTransactions(safeAddress);
+    const existingTx = pendingTransactions.results.find(tx =>
+        tx.data === safeTransactionData.data && tx.to.toLowerCase() === safeTransactionData.to.toLowerCase()
+    );
+    if (existingTx) {
+        console.log(`[NTTService] Transaction already exists. SafeTxHash: ${existingTx.safeTxHash}`);
+        safeTxHash = existingTx.safeTxHash;
+    } else {
+        let safeTransaction = await protocolKitOwner.createTransaction({
+            transactions: [safeTransactionData]
+        });
+
+        safeTxHash = await protocolKitOwner.getTransactionHash(safeTransaction);
+
+        const signature = await protocolKitOwner.signHash(safeTxHash);
+
+        const senderAddress = await signerWallet.getAddress();
+
+        // Propose transaction to the service
+        await apiKit.proposeTransaction({
+            safeAddress: safeAddress,
+            safeTransactionData: safeTransaction.data,
+            safeTxHash,
+            senderAddress: senderAddress,
+            senderSignature: signature.data
+        });
+
+        console.log(`[NTTService] Transaction proposed. SafeTxHash: ${safeTxHash}`);
+    }
+
+    // Get transaction details to return status
+    const transactionDetails = await apiKit.getTransaction(safeTxHash);
+    const confirmations = transactionDetails.confirmations || [];
+    
+    console.log(`[NTTService] Current confirmations: ${confirmations.length}/${transactionDetails.confirmationsRequired}`);
+    if (confirmations.length > 0) {
+        confirmations.forEach((confirmation, index) => {
+            console.log(`[NTTService] Signer ${index + 1}: ${confirmation.owner}`);
+        });
+    }
+    
+    if (confirmations.length >= transactionDetails.confirmationsRequired) {
+        console.log(`[NTTService] Transaction has all required confirmations and is ready for execution.`);
+    }
+
+    return safeTxHash;
+};
+
+export async function proposeBundledTransaction(
+    chainId: number,
+    safeAddress: string,
+    transactions: Array<{to: string, value: string, data: string}>,
+    signerWallet: Wallet,
+    rpcUrl: string
+): Promise<{safeTxHash: string, executed: boolean, executionTxHash?: string}> {
+    const provider = new JsonRpcProvider(rpcUrl);
+    const apiKit = getSafeApiKit(chainId);
+
+    const protocolKitOwner = await Safe.init({
+        provider: rpcUrl,
+        signer: signerWallet.privateKey,
+        safeAddress: safeAddress
+    });
+
+    // Convert transactions to MetaTransactionData format
+    const safeTransactionData: MetaTransactionData[] = transactions.map(tx => ({
+        to: tx.to,
+        value: tx.value,
+        data: tx.data,
+        operation: OperationType.Call
+    }));
+
+    console.log(`[NTTService] Creating bundled transaction with ${safeTransactionData.length} operations`);
+
+    // Create multi-transaction
+    let safeTransaction = await protocolKitOwner.createTransaction({
+        transactions: safeTransactionData
+    });
+
+    const safeTxHash = await protocolKitOwner.getTransactionHash(safeTransaction);
+    const signature = await protocolKitOwner.signHash(safeTxHash);
+    const senderAddress = await signerWallet.getAddress();
+
+    // Propose transaction to the service
+    await apiKit.proposeTransaction({
+        safeAddress: safeAddress,
+        safeTransactionData: safeTransaction.data,
+        safeTxHash,
+        senderAddress: senderAddress,
+        senderSignature: signature.data
+    });
+
+    console.log(`[NTTService] Bundled transaction proposed. SafeTxHash: ${safeTxHash}`);
+
+    // Check if we can execute immediately (threshold = 1)
+    const safeInfo = await protocolKitOwner.getThreshold();
+    const owners = await protocolKitOwner.getOwners();
+    
+    console.log(`[NTTService] Safe threshold: ${safeInfo}, Owners: ${owners.length}`);
+    
+    if (safeInfo === 1 && owners.includes(senderAddress)) {
+        console.log(`[NTTService] Threshold is 1 and signer is owner. Executing transaction...`);
+        
+        try {
+            // Execute the transaction
+            const executeTxResponse = await protocolKitOwner.executeTransaction(safeTransaction);
+            
+            // The response should have transactionResponse property
+            if (executeTxResponse && executeTxResponse.transactionResponse) {
+                const txResponse = executeTxResponse.transactionResponse as any;
+                const receipt = await txResponse.wait();
+                
+                const executionTxHash = receipt.hash || receipt.transactionHash;
+                console.log(`[NTTService] Transaction executed! Hash: ${executionTxHash}`);
+                return { safeTxHash, executed: true, executionTxHash };
+            } else {
+                console.log(`[NTTService] Transaction proposed but not executed (may need manual execution)`);
+                return { safeTxHash, executed: false };
+            }
+        } catch (error) {
+            console.error(`[NTTService] Failed to execute transaction:`, error);
+            // Continue - transaction is still proposed
+        }
+    }
+
+    return { safeTxHash, executed: false };
+};
+
 async function waitForSafeTxConfirmation(
     provider: JsonRpcProvider,
     chainId: number,

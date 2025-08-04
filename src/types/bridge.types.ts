@@ -14,6 +14,7 @@ export interface TransferResult {
   executedTxHashes: string[];
   status: TransferStatus;
   createdAt: Date;
+  message?: string;
 }
 
 export enum TransferStatus {
