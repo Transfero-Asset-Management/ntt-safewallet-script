@@ -1,3 +1,9 @@
+const dotenv = require('dotenv');
+const path = require('path');
+
+// Load environment variables from .env file
+dotenv.config({ path: path.join(__dirname, '.env') });
+
 module.exports = {
   apps: [{
     name: 'brz-ntt-bridge',
@@ -7,6 +13,7 @@ module.exports = {
     watch: false,
     max_memory_restart: '1G',
     env: {
+      ...process.env,  // Include all env vars from .env file
       NODE_ENV: 'production',
       PORT: 3003
     },
