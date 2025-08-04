@@ -33,6 +33,7 @@ export class BridgeService {
       this.signerWallet = Wallet.createRandom(); // Dummy wallet for read-only operations
     } else {
       this.signerWallet = new Wallet(privateKey);
+      console.log(`[Bridge] Initialized with signer address: ${this.signerWallet.address}`);
     }
   }
 
