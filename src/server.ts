@@ -36,10 +36,11 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
-// Start server
-app.listen(PORT, () => {
+// Start server - explicitly listen on all IPv4 interfaces
+app.listen(PORT as number, '0.0.0.0', () => {
   console.log(`BRZ NTT Bridge Service running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Listening on: 0.0.0.0:${PORT}`);
   
   // Check required environment variables
   if (!process.env.ETH_PRIVATE_KEY) {
