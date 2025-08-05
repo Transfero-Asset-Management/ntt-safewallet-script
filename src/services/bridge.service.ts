@@ -12,11 +12,13 @@ import {
   Transfer,
   BridgeMetrics 
 } from "../types/bridge.types";
+import { RebalanceDbService } from "./rebalance-db.service";
 
 export class BridgeService {
   private wormhole: Wormhole<any>;
   private transfers: Map<string, Transfer> = new Map();
   private signerWallet: any; // Changed to any to handle both Wallet types
+  private dbService: RebalanceDbService;
 
   constructor() {
     // Initialize Wormhole SDK
@@ -35,6 +37,9 @@ export class BridgeService {
       this.signerWallet = new Wallet(privateKey);
       console.log(`[Bridge] Initialized with signer address: ${this.signerWallet.address}`);
     }
+
+    // Initialize database service
+    this.dbService = new RebalanceDbService();
   }
 
   private buildChainConfig(): any {
@@ -158,6 +163,14 @@ export class BridgeService {
       transfer.updatedAt = new Date();
       this.transfers.set(transferId, transfer);
 
+      // Save to database
+      try {
+        await this.dbService.saveTransfer(transfer);
+      } catch (dbError) {
+        console.error('[Bridge] Error saving transfer to database:', dbError);
+        // Don't fail the transfer if DB save fails
+      }
+
       console.log(`[Bridge] Transfer initiated successfully`);
       console.log(`[Bridge] Transfer ID: ${transferId}`);
       console.log(`[Bridge] Safe TX Hashes: ${transfer.safeTxHashes.join(', ')}`);
@@ -182,6 +195,14 @@ export class BridgeService {
       transfer.error = error.message;
       transfer.updatedAt = new Date();
       this.transfers.set(transferId, transfer);
+      
+      // Save failed transfer to database
+      try {
+        await this.dbService.saveTransfer(transfer);
+      } catch (dbError) {
+        console.error('[Bridge] Error saving failed transfer to database:', dbError);
+      }
+      
       throw error;
     }
   }
@@ -221,6 +242,13 @@ export class BridgeService {
       console.log(`[Bridge] Transfer ${transferId} completed successfully`);
       console.log(`[Bridge] BRZ has been transferred to ${transfer.destinationChain}`);
       
+      // Update database
+      try {
+        await this.dbService.updateTransferStatus(transferId, TransferStatus.COMPLETED);
+      } catch (dbError) {
+        console.error('[Bridge] Error updating transfer status in database:', dbError);
+      }
+      
     } catch (error: any) {
       console.error(`[Bridge] Error monitoring transfer ${transferId}:`, error);
       
@@ -229,9 +257,23 @@ export class BridgeService {
         console.log(`[Bridge] Transaction not found, but was executed - marking as completed`);
         transfer.status = TransferStatus.COMPLETED;
         transfer.completedAt = new Date();
+        
+        // Update database
+        try {
+          await this.dbService.updateTransferStatus(transferId, TransferStatus.COMPLETED);
+        } catch (dbError) {
+          console.error('[Bridge] Error updating transfer status in database:', dbError);
+        }
       } else {
         transfer.status = TransferStatus.FAILED;
         transfer.error = error.message;
+        
+        // Update database
+        try {
+          await this.dbService.updateTransferStatus(transferId, TransferStatus.FAILED, error.message);
+        } catch (dbError) {
+          console.error('[Bridge] Error updating transfer status in database:', dbError);
+        }
       }
     }
 
