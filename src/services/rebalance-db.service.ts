@@ -46,8 +46,10 @@ export class RebalanceDbService {
         dbStatus = 'processing';
       }
 
-      // Use the execution transaction hash as the main transaction hash
-      const txHash = transfer.executedTxHashes[0] || transfer.safeTxHashes[0] || transfer.id;
+      // Use the execution transaction hash as the main transaction hash, fallback to id for pending
+      const txHash = transfer.executedTxHashes && transfer.executedTxHashes.length > 0 
+        ? transfer.executedTxHashes[0] 
+        : transfer.id;
 
       const query = `
         INSERT INTO rebalance_transactions (
@@ -64,22 +66,21 @@ export class RebalanceDbService {
           to_token_symbol,
           to_token_address,
           to_amount,
-          estimated_fees_usd,
-          gas_fees_usd,
-          bridge_fees_usd,
+          bridge_fee_usd,
+          gas_fee_usd,
+          total_fee_usd,
           created_at,
           completed_at,
           bridge_transaction_id,
-          safe_tx_hashes,
-          error_message
+          reason
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
         )
-        ON CONFLICT (transaction_hash) 
+        ON CONFLICT (transaction_hash, bridge_provider) 
         DO UPDATE SET 
           status = EXCLUDED.status,
           completed_at = EXCLUDED.completed_at,
-          error_message = EXCLUDED.error_message,
+          reason = EXCLUDED.reason,
           updated_at = CURRENT_TIMESTAMP
         RETURNING id
       `;
@@ -101,14 +102,13 @@ export class RebalanceDbService {
         'BRZ',                              // to_token_symbol
         tokenAddresses.destination,          // to_token_address
         transfer.amount,                     // to_amount (same as from_amount for BRZ)
-        0,                                  // estimated_fees_usd (can be updated later)
-        0,                                  // gas_fees_usd
-        0,                                  // bridge_fees_usd
+        0,                                  // bridge_fee_usd
+        0,                                  // gas_fee_usd
+        0,                                  // total_fee_usd
         transfer.createdAt,                  // created_at
         transfer.completedAt || null,        // completed_at
         transfer.id,                         // bridge_transaction_id
-        JSON.stringify(transfer.safeTxHashes), // safe_tx_hashes
-        transfer.error || null               // error_message
+        transfer.error ? `Error: ${transfer.error}` : `Safe TX: ${transfer.safeTxHashes.join(', ')}`  // reason
       ];
 
       const result = await this.db.query(query, values);
@@ -139,8 +139,8 @@ export class RebalanceDbService {
       const query = `
         UPDATE rebalance_transactions 
         SET 
-          status = $1,
-          error_message = $2,
+          status = $1::varchar,
+          reason = $2,
           completed_at = CASE WHEN $1 = 'completed' THEN CURRENT_TIMESTAMP ELSE completed_at END,
           updated_at = CURRENT_TIMESTAMP
         WHERE bridge_transaction_id = $3

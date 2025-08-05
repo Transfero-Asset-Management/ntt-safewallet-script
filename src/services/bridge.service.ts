@@ -130,6 +130,15 @@ export class BridgeService {
 
       console.log(`[Bridge] Total transactions to bundle: ${transactions.length}`);
 
+      // Save initial transfer to database before attempting Safe transaction
+      try {
+        await this.dbService.saveTransfer(transfer);
+        console.log('[Bridge] Initial transfer saved to database');
+      } catch (dbError) {
+        console.error('[Bridge] Error saving initial transfer to database:', dbError);
+        // Don't fail the transfer if DB save fails
+      }
+
       // Bundle and propose all transactions as one Safe transaction
       if (transactions.length > 0) {
         const result = await this.proposeBundledSafeTransaction(
@@ -163,12 +172,13 @@ export class BridgeService {
       transfer.updatedAt = new Date();
       this.transfers.set(transferId, transfer);
 
-      // Save to database
+      // Update database with final status
       try {
-        await this.dbService.saveTransfer(transfer);
+        await this.dbService.updateTransferStatus(transferId, transfer.status);
+        console.log('[Bridge] Transfer status updated in database');
       } catch (dbError) {
-        console.error('[Bridge] Error saving transfer to database:', dbError);
-        // Don't fail the transfer if DB save fails
+        console.error('[Bridge] Error updating transfer status in database:', dbError);
+        // Don't fail the transfer if DB update fails
       }
 
       console.log(`[Bridge] Transfer initiated successfully`);
