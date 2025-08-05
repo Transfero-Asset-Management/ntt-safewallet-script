@@ -11,7 +11,7 @@ export class RebalanceDbService {
     this.db = new Pool({ connectionString: databaseUrl });
     
     // Test connection
-    this.db.query('SELECT NOW()', (err, res) => {
+    this.db.query('SELECT NOW()', (err: Error | null, res: any) => {
       if (err) {
         console.error('[RebalanceDB] Failed to connect to database:', err.message);
       } else {
