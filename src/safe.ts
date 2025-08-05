@@ -5,6 +5,7 @@ import {
     MetaTransactionData,
     OperationType
 } from '@safe-global/safe-core-sdk-types'
+import { getOptimizedGasConfig } from './utils/gas-config'
 
 export async function proposeTransaction(
     chainId: number,
@@ -199,8 +200,15 @@ export async function proposeBundledTransaction(
         console.log(`[NTTService] Threshold is 1 and signer is owner. Executing transaction...`);
         
         try {
-            // Execute the transaction
-            const executeTxResponse = await protocolKitOwner.executeTransaction(safeTransaction);
+            // Get optimized gas configuration
+            const gasConfig = await getOptimizedGasConfig(provider);
+            
+            // Execute the transaction with gas configuration
+            const executeTxResponse = await protocolKitOwner.executeTransaction(safeTransaction, {
+                gasLimit: gasConfig.gasLimit?.toString(),
+                maxFeePerGas: gasConfig.maxFeePerGas?.toString(),
+                maxPriorityFeePerGas: gasConfig.maxPriorityFeePerGas?.toString()
+            } as any);
             
             // The response should have transactionResponse property
             if (executeTxResponse && executeTxResponse.transactionResponse) {
