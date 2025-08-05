@@ -7,13 +7,33 @@ export class RebalanceDbService {
   constructor() {
     // Initialize database connection
     const databaseUrl = process.env.DATABASE_URL || 'postgresql://arb_user:arb_password@localhost:5432/pricing_service_db';
+    console.log('[RebalanceDB] Initializing with database URL:', databaseUrl.replace(/\/\/.*@/, '//<credentials>@'));
     this.db = new Pool({ connectionString: databaseUrl });
+    
+    // Test connection
+    this.db.query('SELECT NOW()', (err, res) => {
+      if (err) {
+        console.error('[RebalanceDB] Failed to connect to database:', err.message);
+      } else {
+        console.log('[RebalanceDB] Successfully connected to database at', res.rows[0].now);
+      }
+    });
   }
 
   /**
    * Save NTT bridge transfer to rebalance_transactions table
    */
   async saveTransfer(transfer: Transfer): Promise<number> {
+    console.log(`[RebalanceDB] Attempting to save transfer ${transfer.id}`);
+    console.log(`[RebalanceDB] Transfer details:`, {
+      id: transfer.id,
+      sourceChain: transfer.sourceChain,
+      destinationChain: transfer.destinationChain,
+      amount: transfer.amount,
+      status: transfer.status,
+      txHashes: transfer.executedTxHashes
+    });
+    
     try {
       // Map transfer status to rebalance transaction status
       let dbStatus = 'pending';
