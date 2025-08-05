@@ -51,6 +51,16 @@ export class RebalanceDbService {
         ? transfer.executedTxHashes[0] 
         : transfer.id;
 
+      // Calculate USD values (BRZ approximate rate)
+      const BRZ_USD_RATE = 0.20;
+      const amountFloat = parseFloat(transfer.amount);
+      const amountUsd = amountFloat * BRZ_USD_RATE;
+      
+      // Estimate fees (these are rough estimates for NTT)
+      const estimatedBridgeFeeUsd = 5; // Typical NTT bridge fee
+      const estimatedGasFeeUsd = 2; // Typical gas fee
+      const totalFeeUsd = estimatedBridgeFeeUsd + estimatedGasFeeUsd;
+
       const query = `
         INSERT INTO rebalance_transactions (
           transaction_hash,
@@ -61,11 +71,13 @@ export class RebalanceDbService {
           from_token_symbol,
           from_token_address,
           from_amount,
+          from_amount_usd,
           to_network,
           to_safe_address,
           to_token_symbol,
           to_token_address,
           to_amount,
+          to_amount_usd,
           bridge_fee_usd,
           gas_fee_usd,
           total_fee_usd,
@@ -74,13 +86,18 @@ export class RebalanceDbService {
           bridge_transaction_id,
           reason
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
         )
         ON CONFLICT (transaction_hash, bridge_provider) 
         DO UPDATE SET 
           status = EXCLUDED.status,
           completed_at = EXCLUDED.completed_at,
           reason = EXCLUDED.reason,
+          from_amount_usd = EXCLUDED.from_amount_usd,
+          to_amount_usd = EXCLUDED.to_amount_usd,
+          bridge_fee_usd = EXCLUDED.bridge_fee_usd,
+          gas_fee_usd = EXCLUDED.gas_fee_usd,
+          total_fee_usd = EXCLUDED.total_fee_usd,
           updated_at = CURRENT_TIMESTAMP
         RETURNING id
       `;
@@ -97,14 +114,16 @@ export class RebalanceDbService {
         'BRZ',                              // from_token_symbol
         tokenAddresses.source,               // from_token_address
         transfer.amount,                     // from_amount
+        amountUsd,                           // from_amount_usd
         transfer.destinationChain,           // to_network
         transfer.destinationAddress,         // to_safe_address
         'BRZ',                              // to_token_symbol
         tokenAddresses.destination,          // to_token_address
         transfer.amount,                     // to_amount (same as from_amount for BRZ)
-        0,                                  // bridge_fee_usd
-        0,                                  // gas_fee_usd
-        0,                                  // total_fee_usd
+        amountUsd,                           // to_amount_usd
+        estimatedBridgeFeeUsd,               // bridge_fee_usd
+        estimatedGasFeeUsd,                  // gas_fee_usd
+        totalFeeUsd,                         // total_fee_usd
         transfer.createdAt,                  // created_at
         transfer.completedAt || null,        // completed_at
         transfer.id,                         // bridge_transaction_id
