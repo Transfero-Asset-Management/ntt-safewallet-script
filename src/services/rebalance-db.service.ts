@@ -143,7 +143,7 @@ export class RebalanceDbService {
   /**
    * Update transfer status in database
    */
-  async updateTransferStatus(transferId: string, status: TransferStatus, error?: string): Promise<void> {
+  async updateTransferStatus(transferId: string, status: TransferStatus, error?: string, executedTxHash?: string): Promise<void> {
     try {
       let dbStatus = 'pending';
       if (status === TransferStatus.COMPLETED) {
@@ -155,7 +155,17 @@ export class RebalanceDbService {
         dbStatus = 'processing';
       }
 
-      const query = `
+      // Update transaction_hash if we now have the executed tx hash
+      const query = executedTxHash ? `
+        UPDATE rebalance_transactions 
+        SET 
+          status = $1::varchar,
+          reason = $2,
+          transaction_hash = $3,
+          completed_at = CASE WHEN $1 = 'completed' THEN CURRENT_TIMESTAMP ELSE completed_at END,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE bridge_transaction_id = $4
+      ` : `
         UPDATE rebalance_transactions 
         SET 
           status = $1::varchar,
@@ -165,8 +175,12 @@ export class RebalanceDbService {
         WHERE bridge_transaction_id = $3
       `;
 
-      await this.db.query(query, [dbStatus, error || null, transferId]);
-      console.log(`[RebalanceDB] Updated transfer ${transferId} status to ${dbStatus}`);
+      const params = executedTxHash 
+        ? [dbStatus, error || null, executedTxHash, transferId]
+        : [dbStatus, error || null, transferId];
+
+      await this.db.query(query, params);
+      console.log(`[RebalanceDB] Updated transfer ${transferId} status to ${dbStatus}${executedTxHash ? ` with tx hash ${executedTxHash}` : ''}`);
     } catch (error) {
       console.error('[RebalanceDB] Error updating transfer status:', error);
       // Don't throw - we don't want to break the transfer flow if DB update fails

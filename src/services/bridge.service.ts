@@ -174,7 +174,10 @@ export class BridgeService {
 
       // Update database with final status
       try {
-        await this.dbService.updateTransferStatus(transferId, transfer.status);
+        const executedTxHash = transfer.executedTxHashes && transfer.executedTxHashes.length > 0 
+          ? transfer.executedTxHashes[0] 
+          : undefined;
+        await this.dbService.updateTransferStatus(transferId, transfer.status, undefined, executedTxHash);
         console.log('[Bridge] Transfer status updated in database');
       } catch (dbError) {
         console.error('[Bridge] Error updating transfer status in database:', dbError);
@@ -254,7 +257,10 @@ export class BridgeService {
       
       // Update database
       try {
-        await this.dbService.updateTransferStatus(transferId, TransferStatus.COMPLETED);
+        const executedTxHash = transfer.executedTxHashes && transfer.executedTxHashes.length > 0 
+          ? transfer.executedTxHashes[0] 
+          : undefined;
+        await this.dbService.updateTransferStatus(transferId, TransferStatus.COMPLETED, undefined, executedTxHash);
       } catch (dbError) {
         console.error('[Bridge] Error updating transfer status in database:', dbError);
       }
@@ -270,7 +276,10 @@ export class BridgeService {
         
         // Update database
         try {
-          await this.dbService.updateTransferStatus(transferId, TransferStatus.COMPLETED);
+          const executedTxHash = transfer.executedTxHashes && transfer.executedTxHashes.length > 0 
+            ? transfer.executedTxHashes[0] 
+            : undefined;
+          await this.dbService.updateTransferStatus(transferId, TransferStatus.COMPLETED, undefined, executedTxHash);
         } catch (dbError) {
           console.error('[Bridge] Error updating transfer status in database:', dbError);
         }
