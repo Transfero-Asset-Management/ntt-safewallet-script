@@ -6,6 +6,8 @@ export interface TransferRequest {
   amount: string;
   safeAddress: string;
   destinationAddress?: string;
+  sourceRpcUrl?: string;  // Optional RPC URL for source chain
+  destRpcUrl?: string;    // Optional RPC URL for destination chain
 }
 
 export interface TransferResult {

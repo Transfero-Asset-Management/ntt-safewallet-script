@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { bridgeRoutes } from './routes/bridge.routes';
 import { statusRoutes } from './routes/status.routes';
+import { estimateRoutes } from './routes/estimate.routes';
 
 // Load environment variables
 dotenv.config();
@@ -25,6 +26,7 @@ app.get('/health', (req, res) => {
 
 // Routes
 app.use('/api/bridge', bridgeRoutes);
+app.use('/api/bridge/estimate', estimateRoutes);
 app.use('/api/status', statusRoutes);
 
 // Error handling middleware

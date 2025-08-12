@@ -11,13 +11,20 @@ const bridgeService = new BridgeService();
  */
 router.post('/transfer', async (req: Request, res: Response, next: Function) => {
   try {
+    // Log raw request body first
+    console.log('[Bridge Routes] Raw request body:', JSON.stringify(req.body, null, 2));
+    
     const transferRequest: TransferRequest = {
       sourceChain: req.body.sourceChain,
       destinationChain: req.body.destinationChain,
       amount: req.body.amount,
       safeAddress: req.body.safeAddress,
-      destinationAddress: req.body.destinationAddress || req.body.safeAddress // Default to same address
+      destinationAddress: req.body.destinationAddress || req.body.safeAddress, // Default to same address
+      sourceRpcUrl: req.body.sourceRpcUrl,  // Pass RPC URL if provided
+      destRpcUrl: req.body.destRpcUrl       // Pass RPC URL if provided
     };
+    
+    console.log('[Bridge Routes] Parsed transfer request:', JSON.stringify(transferRequest, null, 2));
 
     // Validate request
     if (!transferRequest.sourceChain || !transferRequest.destinationChain || 

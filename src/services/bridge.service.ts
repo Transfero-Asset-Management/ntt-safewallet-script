@@ -42,13 +42,33 @@ export class BridgeService {
     this.dbService = new RebalanceDbService();
   }
 
-  private buildChainConfig(): any {
+  private buildChainConfig(customRpcs?: { source?: string; dest?: string; sourceChain?: string; destChain?: string }): any {
     const config: any = { chains: {} };
     
     for (const [chain, chainConfig] of Object.entries(CHAIN_CONFIGS)) {
       if (chainConfig) {
+        let rpcUrl = chainConfig.rpc;
+        
+        // Override with custom RPC if provided for this chain
+        if (customRpcs) {
+          if (customRpcs.sourceChain === chain && customRpcs.source) {
+            rpcUrl = customRpcs.source;
+            console.log(`[Bridge] Using custom RPC for ${chain}: ${rpcUrl.substring(0, 30)}...`);
+          } else if (customRpcs.destChain === chain && customRpcs.dest) {
+            rpcUrl = customRpcs.dest;
+            console.log(`[Bridge] Using custom RPC for ${chain}: ${rpcUrl.substring(0, 30)}...`);
+          }
+        }
+        
+        // Also check environment variables as fallback
+        const envKey = `${chain.toUpperCase()}_RPC`;
+        const envRpc = process.env[envKey];
+        if (envRpc && !customRpcs) {
+          rpcUrl = envRpc;
+        }
+        
         config.chains[chain] = {
-          rpc: chainConfig.rpc
+          rpc: rpcUrl
         };
       }
     }
@@ -62,6 +82,21 @@ export class BridgeService {
     // Normalize chain names to match Wormhole SDK expectations
     const sourceChain = this.normalizeChainName(request.sourceChain);
     const destinationChain = this.normalizeChainName(request.destinationChain);
+    
+    // If custom RPCs are provided, reinitialize Wormhole with custom config
+    if (request.sourceRpcUrl || request.destRpcUrl) {
+      console.log('[Bridge] Reinitializing Wormhole with custom RPCs...');
+      const customConfig = this.buildChainConfig({
+        source: request.sourceRpcUrl,
+        dest: request.destRpcUrl,
+        sourceChain: sourceChain,
+        destChain: destinationChain
+      });
+      
+      this.wormhole = new Wormhole("Mainnet", [evm.Platform], {
+        chains: customConfig.chains
+      });
+    }
     
     // Create transfer record
     const transfer: Transfer = {
@@ -141,15 +176,20 @@ export class BridgeService {
 
       // Bundle and propose all transactions as one Safe transaction
       if (transactions.length > 0) {
+        // Use custom RPC if provided, otherwise use the chain config
+        const rpcUrl = request.sourceRpcUrl || src.config.rpc;
+        console.log(`[Bridge] Using RPC for Safe transaction: ${rpcUrl.substring(0, 30)}...`);
+        
         const result = await this.proposeBundledSafeTransaction(
           CHAIN_CONFIGS[src.chain]!.chainId,
           request.safeAddress,
           transactions,
           this.signerWallet,
-          src.config.rpc
+          rpcUrl
         );
 
         transfer.safeTxHashes.push(result.safeTxHash);
+        
         
         if (result.executed && result.executionTxHash) {
           transfer.status = TransferStatus.EXECUTING;
