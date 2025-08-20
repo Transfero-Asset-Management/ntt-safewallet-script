@@ -24,7 +24,7 @@ export class RebalanceDbService {
    * Save NTT bridge transfer to rebalance_transactions table
    */
   async saveTransfer(transfer: Transfer): Promise<number> {
-    console.log(`[RebalanceDB] Attempting to save transfer ${transfer.id}`);
+    console.log(`[RebalanceDB] SKIPPING database save - handled by main API`);
     console.log(`[RebalanceDB] Transfer details:`, {
       id: transfer.id,
       sourceChain: transfer.sourceChain,
@@ -33,6 +33,10 @@ export class RebalanceDbService {
       status: transfer.status,
       txHashes: transfer.executedTxHashes
     });
+    
+    // DISABLED: The main API already records transactions via /api/bridge/wormhole/transfer
+    // This was causing duplicate records with different IDs and hardcoded $7 fees
+    return 999999; // Return dummy ID
     
     try {
       // Map transfer status to rebalance transaction status
@@ -144,6 +148,13 @@ export class RebalanceDbService {
    * Update transfer status in database
    */
   async updateTransferStatus(transferId: string, status: TransferStatus, error?: string, executedTxHash?: string): Promise<void> {
+    console.log(`[RebalanceDB] SKIPPING status update - handled by main API`);
+    console.log(`[RebalanceDB] Transfer ${transferId} status: ${status}`);
+    
+    // DISABLED: The main API already handles status updates via /api/bridge/wormhole/status
+    // This was causing conflicts with duplicate records
+    return;
+    
     try {
       let dbStatus = 'pending';
       if (status === TransferStatus.COMPLETED) {

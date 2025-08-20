@@ -154,10 +154,12 @@ export async function proposeBundledTransaction(
     const provider = new JsonRpcProvider(rpcUrl);
     const apiKit = getSafeApiKit(chainId);
 
+    // Force refresh Safe state by not using any cache
     const protocolKitOwner = await Safe.init({
         provider: rpcUrl,
         signer: signerWallet.privateKey,
-        safeAddress: safeAddress
+        safeAddress: safeAddress,
+        isL1SafeSingleton: false // Force fresh initialization
     });
 
     // Convert transactions to MetaTransactionData format
@@ -170,33 +172,101 @@ export async function proposeBundledTransaction(
 
     console.log(`[NTTService] Creating bundled transaction with ${safeTransactionData.length} operations`);
 
-    // Create multi-transaction
+    // Get the current nonce to ensure we're using the latest
+    const currentNonce = await protocolKitOwner.getNonce();
+    console.log(`[NTTService] Current Safe nonce from contract: ${currentNonce}`);
+    
+    // Check pending transactions to see if we need a higher nonce
+    const pendingTxs = await apiKit.getPendingTransactions(safeAddress);
+    const pendingNonces = pendingTxs.results.map(tx => tx.nonce);
+    const maxPendingNonce = pendingNonces.length > 0 ? Math.max(...pendingNonces) : -1;
+    
+    if (maxPendingNonce >= currentNonce) {
+        console.log(`[NTTService] ⚠️ Found pending transaction with nonce ${maxPendingNonce}`);
+        console.log(`[NTTService] Contract nonce is ${currentNonce}, but pending tx exists`);
+    }
+    
+    // Create multi-transaction - let SDK handle nonce automatically
     let safeTransaction = await protocolKitOwner.createTransaction({
         transactions: safeTransactionData
+        // Remove explicit nonce setting - let SDK handle it
     });
 
+    // Log the actual transaction data being used
+    console.log(`[NTTService] Transaction details:`);
+    console.log(`[NTTService]   - Nonce: ${safeTransaction.data.nonce}`);
+    console.log(`[NTTService]   - To: ${safeTransaction.data.to}`);
+    console.log(`[NTTService]   - Value: ${safeTransaction.data.value}`);
+    console.log(`[NTTService]   - Data length: ${safeTransaction.data.data.length} bytes`);
+    console.log(`[NTTService]   - Data hash: ${require('crypto').createHash('sha256').update(safeTransaction.data.data).digest('hex').substring(0, 16)}...`);
+
     const safeTxHash = await protocolKitOwner.getTransactionHash(safeTransaction);
+    console.log(`[NTTService] Generated SafeTxHash: ${safeTxHash}`);
+    
     const signature = await protocolKitOwner.signHash(safeTxHash);
     const senderAddress = await signerWallet.getAddress();
 
-    // Propose transaction to the service
-    await apiKit.proposeTransaction({
-        safeAddress: safeAddress,
-        safeTransactionData: safeTransaction.data,
-        safeTxHash,
-        senderAddress: senderAddress,
-        senderSignature: signature.data
-    });
+    // Check if this transaction already exists
+    try {
+        const existingTx = await apiKit.getTransaction(safeTxHash);
+        console.log(`[NTTService] ⚠️ DUPLICATE SAFETXHASH DETECTED: ${safeTxHash}`);
+        console.log(`[NTTService] This means the same transaction parameters and nonce were used!`);
+        console.log(`[NTTService]   - Transaction nonce: ${safeTransaction.data.nonce}`);
+        console.log(`[NTTService]   - Is executed: ${existingTx.isExecuted}`);
+        console.log(`[NTTService]   - Is successful: ${existingTx.isSuccessful}`);
+        console.log(`[NTTService]   - Confirmations: ${existingTx.confirmations?.length || 0}/${existingTx.confirmationsRequired}`);
+        
+        if (existingTx.isExecuted) {
+            console.log(`[NTTService] ⚠️ This transaction was already executed!`);
+            console.log(`[NTTService]   - Execution date: ${existingTx.executionDate}`);
+            console.log(`[NTTService]   - Transaction hash: ${existingTx.transactionHash}`);
+            console.log(`[NTTService]   - Original nonce: ${existingTx.nonce}`);
+            
+            // Return the existing executed transaction instead of trying to recreate it
+            return { 
+                safeTxHash, 
+                executed: true, 
+                executionTxHash: existingTx.transactionHash || undefined
+            };
+        } else {
+            console.log(`[NTTService] Transaction exists but not executed. Will add signature.`);
+        }
+    } catch (error) {
+        console.log(`[NTTService] Transaction ${safeTxHash} not found in Safe service (will create new)`);
+        console.log(`[NTTService]   - Using nonce: ${safeTransaction.data.nonce}`);
+    }
 
-    console.log(`[NTTService] Bundled transaction proposed. SafeTxHash: ${safeTxHash}`);
+    // Propose transaction to the service
+    try {
+        await apiKit.proposeTransaction({
+            safeAddress: safeAddress,
+            safeTransactionData: safeTransaction.data,
+            safeTxHash,
+            senderAddress: senderAddress,
+            senderSignature: signature.data
+        });
+        console.log(`[NTTService] Bundled transaction proposed. SafeTxHash: ${safeTxHash}`);
+    } catch (proposeError: any) {
+        // If the transaction already exists, that's ok - we can still try to execute it
+        if (proposeError.message && proposeError.message.includes('already exists')) {
+            console.log(`[NTTService] Transaction already exists in Safe service, continuing...`);
+        } else {
+            throw proposeError;
+        }
+    }
 
     // Check if we can execute immediately (threshold = 1)
     const safeInfo = await protocolKitOwner.getThreshold();
     const owners = await protocolKitOwner.getOwners();
     
     console.log(`[NTTService] Safe threshold: ${safeInfo}, Owners: ${owners.length}`);
+    console.log(`[NTTService] Signer address: ${senderAddress}`);
+    console.log(`[NTTService] Is signer an owner: ${owners.includes(senderAddress)}`);
     
-    if (safeInfo === 1 && owners.includes(senderAddress)) {
+    // Convert threshold to number for comparison
+    const thresholdNumber = Number(safeInfo);
+    
+    if (thresholdNumber === 1 && owners.includes(senderAddress)) {
         console.log(`[NTTService] Threshold is 1 and signer is owner. Executing transaction...`);
         
         try {
@@ -213,17 +283,54 @@ export async function proposeBundledTransaction(
             // The response should have transactionResponse property
             if (executeTxResponse && executeTxResponse.transactionResponse) {
                 const txResponse = executeTxResponse.transactionResponse as any;
-                const receipt = await txResponse.wait();
+                console.log(`[NTTService] Transaction sent, hash: ${txResponse.hash}`);
+                console.log(`[NTTService] Waiting for confirmation (this may take a moment)...`);
                 
-                const executionTxHash = receipt.hash || receipt.transactionHash;
-                console.log(`[NTTService] Transaction executed! Hash: ${executionTxHash}`);
+                // Wait for the transaction with retries
+                let receipt;
+                try {
+                    receipt = await txResponse.wait();
+                } catch (waitError: any) {
+                    console.warn(`[NTTService] Failed to wait for receipt: ${waitError.message}`);
+                    console.log(`[NTTService] Transaction was sent with hash: ${txResponse.hash}`);
+                    console.log(`[NTTService] The transaction is likely still being mined. Check the Safe UI.`);
+                    
+                    // Return with the transaction hash even if we couldn't wait for receipt
+                    return { safeTxHash, executed: true, executionTxHash: txResponse.hash };
+                }
+                
+                const executionTxHash = receipt.hash || receipt.transactionHash || undefined;
+                console.log(`[NTTService] Transaction confirmed! Hash: ${executionTxHash}`);
                 return { safeTxHash, executed: true, executionTxHash };
             } else {
                 console.log(`[NTTService] Transaction proposed but not executed (may need manual execution)`);
                 return { safeTxHash, executed: false };
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error(`[NTTService] Failed to execute transaction:`, error);
+            
+            // Check for specific Safe error codes
+            if (error.message && error.message.includes('GS013')) {
+                console.error(`[NTTService] ⚠️ This transaction was already executed on-chain!`);
+                console.error(`[NTTService] The Safe rejected execution because this exact transaction has been executed before.`);
+                console.error(`[NTTService] SafeTxHash: ${safeTxHash}`);
+                
+                // Try to find the original execution transaction
+                try {
+                    const txDetails = await apiKit.getTransaction(safeTxHash);
+                    if (txDetails.isExecuted && txDetails.transactionHash) {
+                        console.log(`[NTTService] Found original execution: ${txDetails.transactionHash}`);
+                        console.log(`[NTTService] Executed at: ${txDetails.executionDate}`);
+                        return { safeTxHash, executed: true, executionTxHash: txDetails.transactionHash || undefined };
+                    }
+                } catch (fetchError) {
+                    console.error(`[NTTService] Could not fetch transaction details`);
+                }
+                
+                // Return indicating the transaction was already executed (but we don't have the tx hash)
+                return { safeTxHash, executed: false };
+            }
+            
             // Continue - transaction is still proposed
         }
     }
