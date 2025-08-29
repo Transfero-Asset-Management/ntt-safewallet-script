@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'ntt-service',
-      script: './dist/src/ntt-service.js',
+      script: './dist/index.js',
       instances: 1,
       autorestart: true,
       watch: false,
