@@ -5,14 +5,8 @@ export type NttContracts = {
   [key in Chain]?: Ntt.Contracts;
 };
 
-export type ChainConfig = {
-  rpc: string;
-  chainId: number;
-};
-
-export type ChainConfigs = {
-  [key in Chain]?: ChainConfig;
-};
+// Removed ChainConfig and ChainConfigs - no longer needed
+// RPCs are provided by the database/service layer
 
 export const NTT_TOKENS: NttContracts = {
   Base: {
@@ -47,29 +41,12 @@ export const NTT_TOKENS: NttContracts = {
   }
 };
 
-export const CHAIN_CONFIGS: ChainConfigs = {
-  Base: {
-    rpc: "https://mainnet.base.org",
-    chainId: 8453,
-  },
-  Polygon: {
-    rpc: "https://polygon.drpc.org",
-    chainId: 137,
-  },
-  Avalanche: {
-    rpc: "https://avalanche.drpc.org",
-    chainId: 43114,
-  },
-  Arbitrum: {
-    rpc: "https://arbitrum-one-rpc.publicnode.com",
-    chainId: 42161,
-  },
-  Bsc: {
-    rpc: "https://bsc-dataseed.bnbchain.org",
-    chainId: 56,
-  },
-  Unichain: {
-    rpc: "https://mainnet.unichain.org",
-    chainId: 130,
-  }
+// Chain IDs - the only constant we need
+export const CHAIN_IDS: Record<string, number> = {
+  Base: 8453,
+  Polygon: 137,
+  Avalanche: 43114,
+  Arbitrum: 42161,
+  Bsc: 56,
+  Unichain: 130,
 };

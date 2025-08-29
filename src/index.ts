@@ -3,7 +3,7 @@ import evm from "@wormhole-foundation/sdk/platforms/evm";
 import { Wallet } from "ethers";
 
 import "@wormhole-foundation/sdk-evm-ntt";
-import { NTT_TOKENS, CHAIN_CONFIGS } from "./utils/const";
+import { NTT_TOKENS, CHAIN_IDS } from "./utils/const";
 import { proposeTransaction } from "./safe";
 
 // Parse command line arguments
@@ -12,7 +12,7 @@ function parseArgs() {
   if (args.length < 5) {
     console.log("Usage: ts-node src/index.ts <srcChain> <dstChain> <srcAddress> <dstAddress> <amount>");
     console.log("Example: ts-node src/index.ts Polygon Base 0x123... 0x456... 0.1");
-    console.log("Available chains:", Object.keys(CHAIN_CONFIGS));
+    console.log("Available chains:", Object.keys(CHAIN_IDS));
     process.exit(1);
   }
 
@@ -30,25 +30,35 @@ function parseArgs() {
 
   console.log(`Transfer: ${transferAmount} from ${srcChain} (${srcAddress}) to ${dstChain} (${dstAddress})`);
 
+  // This CLI tool requires RPCs to be provided via environment variables
+  const getRpcUrl = (chain: string) => {
+    const envKey = `${chain.toUpperCase()}_RPC`;
+    const rpc = process.env[envKey];
+    if (!rpc) {
+      throw new Error(`RPC URL for ${chain} not found. Please set ${envKey} environment variable`);
+    }
+    return rpc;
+  };
+  
   const wh = new Wormhole("Mainnet", [evm.Platform], {
     "chains": {
       "Base": {
-        "rpc": CHAIN_CONFIGS["Base"]?.rpc,
+        "rpc": getRpcUrl("Base"),
       },
       "Polygon": {
-        "rpc": CHAIN_CONFIGS["Polygon"]?.rpc,
+        "rpc": getRpcUrl("Polygon"),
       },
       "Avalanche": {
-        "rpc": CHAIN_CONFIGS["Avalanche"]?.rpc,
+        "rpc": getRpcUrl("Avalanche"),
       },
       "Arbitrum": {
-        "rpc": CHAIN_CONFIGS["Arbitrum"]?.rpc,
+        "rpc": getRpcUrl("Arbitrum"),
       },
       "Bsc": {
-        "rpc": CHAIN_CONFIGS["Bsc"]?.rpc,
+        "rpc": getRpcUrl("Bsc"),
       },
       "Unichain": {
-        "rpc": CHAIN_CONFIGS["Unichain"]?.rpc,
+        "rpc": getRpcUrl("Unichain"),
       }
     }
   });
@@ -93,7 +103,7 @@ function parseArgs() {
     console.log(transaction);
 
     const { safeTxHash, txHash } = await proposeTransaction(
-      CHAIN_CONFIGS[src.chain]!.chainId,
+      CHAIN_IDS[src.chain],
       srcChainAddress.address.toString(),
       transaction.to,
       transaction.value ? transaction.value.toString() : "0",

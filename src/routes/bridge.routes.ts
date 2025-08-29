@@ -76,6 +76,32 @@ router.get('/transfer/:transferId', async (req: Request, res: Response, next: Fu
 });
 
 /**
+ * GET /api/bridge/status/:transferId
+ * Get transfer status by ID (alias for compatibility)
+ */
+router.get('/status/:transferId', async (req: Request, res: Response, next: Function) => {
+  try {
+    const { transferId } = req.params;
+    
+    const transfer = await bridgeService.getTransferStatus(transferId);
+    
+    if (!transfer) {
+      return res.status(404).json({
+        success: false,
+        error: 'Transfer not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      transfer: transfer  // Use 'transfer' key to match expected response format
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /api/bridge/resume/:txHash
  * Resume a stuck transfer by transaction hash
  */

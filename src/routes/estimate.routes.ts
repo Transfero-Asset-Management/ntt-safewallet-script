@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { Wormhole, amount, Chain } from "@wormhole-foundation/sdk";
 import evm from "@wormhole-foundation/sdk/platforms/evm";
 import "@wormhole-foundation/sdk-evm-ntt";
-import { NTT_TOKENS, CHAIN_CONFIGS } from "../utils/const";
+import { NTT_TOKENS, CHAIN_IDS } from "../utils/const";
 
 const router = Router();
 
@@ -43,23 +43,28 @@ router.post('/', async (req: Request, res: Response, next: Function) => {
     const srcChain = normalizeChainName(sourceChain);
     const dstChain = normalizeChainName(destinationChain);
 
-    // Build chain config with custom RPCs if provided
+    // Build chain config - RPCs MUST be provided
     const buildChainConfig = (sourceRpc?: string, destRpc?: string): any => {
+      if (!sourceRpc || !destRpc) {
+        throw new Error('RPC URLs must be provided for source and destination chains');
+      }
+      
       const config: any = { chains: {} };
       
-      for (const [chain, chainConfig] of Object.entries(CHAIN_CONFIGS)) {
-        if (chainConfig) {
-          let rpcUrl = chainConfig.rpc;
-          
-          // Override with custom RPC if provided
-          if (chain === srcChain && sourceRpc) {
-            rpcUrl = sourceRpc;
-            console.log(`[Estimate] Using custom RPC for ${chain}: ${rpcUrl.substring(0, 30)}...`);
-          } else if (chain === dstChain && destRpc) {
-            rpcUrl = destRpc;
-            console.log(`[Estimate] Using custom RPC for ${chain}: ${rpcUrl.substring(0, 30)}...`);
-          }
-          
+      for (const chain of Object.keys(CHAIN_IDS)) {
+        let rpcUrl = "";
+        
+        // Set RPC for source and destination chains
+        if (chain === srcChain) {
+          rpcUrl = sourceRpc;
+          console.log(`[Estimate] Using RPC for source ${chain}: ${rpcUrl.substring(0, 40)}...`);
+        } else if (chain === dstChain) {
+          rpcUrl = destRpc;
+          console.log(`[Estimate] Using RPC for dest ${chain}: ${rpcUrl.substring(0, 40)}...`);
+        }
+        
+        // Only add chains with RPCs
+        if (rpcUrl) {
           config.chains[chain] = {
             rpc: rpcUrl
           };

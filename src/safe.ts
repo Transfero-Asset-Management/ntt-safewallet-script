@@ -259,6 +259,7 @@ export async function proposeBundledTransaction(
     const safeInfo = await protocolKitOwner.getThreshold();
     const owners = await protocolKitOwner.getOwners();
     
+    console.log(`[NTTService] Safe address: ${safeAddress}`);
     console.log(`[NTTService] Safe threshold: ${safeInfo}, Owners: ${owners.length}`);
     console.log(`[NTTService] Signer address: ${senderAddress}`);
     console.log(`[NTTService] Is signer an owner: ${owners.includes(senderAddress)}`);
@@ -267,18 +268,38 @@ export async function proposeBundledTransaction(
     const thresholdNumber = Number(safeInfo);
     
     if (thresholdNumber === 1 && owners.includes(senderAddress)) {
-        console.log(`[NTTService] Threshold is 1 and signer is owner. Executing transaction...`);
+        console.log(`[NTTService] Threshold is 1 and signer is owner. Will execute transaction...`);
+        
+        // Wait for the Safe service to fully index the transaction
+        console.log(`[NTTService] Waiting 5 seconds for Safe service to fully process the transaction...`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        console.log(`[NTTService] Executing transaction now...`);
         
         try {
             // Get optimized gas configuration
             const gasConfig = await getOptimizedGasConfig(provider);
             
+            console.log(`[NTTService] Gas configuration:`);
+            console.log(`[NTTService]   - maxFeePerGas: ${gasConfig.maxFeePerGas ? (Number(gasConfig.maxFeePerGas) / 1e9).toFixed(2) : 'not set'} gwei`);
+            console.log(`[NTTService]   - maxPriorityFeePerGas: ${gasConfig.maxPriorityFeePerGas ? (Number(gasConfig.maxPriorityFeePerGas) / 1e9).toFixed(2) : 'not set'} gwei`);
+            console.log(`[NTTService]   - gasLimit: ${gasConfig.gasLimit || 'auto'}`);
+            
             // Execute the transaction with gas configuration
-            const executeTxResponse = await protocolKitOwner.executeTransaction(safeTransaction, {
-                gasLimit: gasConfig.gasLimit?.toString(),
-                maxFeePerGas: gasConfig.maxFeePerGas?.toString(),
-                maxPriorityFeePerGas: gasConfig.maxPriorityFeePerGas?.toString()
-            } as any);
+            // Add a reasonable gas limit if not set
+            const executionOptions: any = {};
+            if (gasConfig.maxFeePerGas) {
+                executionOptions.maxFeePerGas = gasConfig.maxFeePerGas.toString();
+            }
+            if (gasConfig.maxPriorityFeePerGas) {
+                executionOptions.maxPriorityFeePerGas = gasConfig.maxPriorityFeePerGas.toString();
+            }
+            // Set a reasonable gas limit for Safe execution
+            executionOptions.gasLimit = '500000';
+            
+            console.log(`[NTTService] Executing transaction with options:`, executionOptions);
+            
+            const executeTxResponse = await protocolKitOwner.executeTransaction(safeTransaction, executionOptions);
             
             // The response should have transactionResponse property
             if (executeTxResponse && executeTxResponse.transactionResponse) {
@@ -307,7 +328,19 @@ export async function proposeBundledTransaction(
                 return { safeTxHash, executed: false };
             }
         } catch (error: any) {
-            console.error(`[NTTService] Failed to execute transaction:`, error);
+            console.error(`[NTTService] Failed to execute transaction:`, error.message || error);
+            
+            // Check Safe balance before execution
+            try {
+                const safeBalance = await provider.getBalance(safeAddress);
+                console.log(`[NTTService] Safe balance: ${safeBalance.toString()} wei (${Number(safeBalance) / 1e18} ETH)`);
+                
+                if (safeBalance === BigInt(0)) {
+                    console.error(`[NTTService] ⚠️ Safe has no native token for gas! Please fund the Safe at ${safeAddress}`);
+                }
+            } catch (balanceError) {
+                console.error(`[NTTService] Could not check Safe balance:`, balanceError);
+            }
             
             // Check for specific Safe error codes
             if (error.message && error.message.includes('GS013')) {
@@ -329,6 +362,14 @@ export async function proposeBundledTransaction(
                 
                 // Return indicating the transaction was already executed (but we don't have the tx hash)
                 return { safeTxHash, executed: false };
+            }
+            
+            // Check for missing revert data (usually means insufficient gas)
+            if (error.message && error.message.includes('missing revert data')) {
+                console.error(`[NTTService] ⚠️ Transaction reverted without data. Common causes:`);
+                console.error(`[NTTService]   1. Safe has insufficient native token for gas`);
+                console.error(`[NTTService]   2. Safe is trying to execute an invalid operation`);
+                console.error(`[NTTService]   3. Network issues or RPC problems`);
             }
             
             // Continue - transaction is still proposed

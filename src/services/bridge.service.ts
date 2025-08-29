@@ -3,7 +3,7 @@ import evm from "@wormhole-foundation/sdk/platforms/evm";
 import { Wallet } from "ethers";
 import "@wormhole-foundation/sdk-evm-ntt";
 
-import { NTT_TOKENS, CHAIN_CONFIGS } from "../utils/const";
+import { NTT_TOKENS, CHAIN_IDS } from "../utils/const";
 import { proposeTransaction } from "../safe";
 import { 
   TransferRequest, 
@@ -21,11 +21,10 @@ export class BridgeService {
   private dbService: RebalanceDbService;
 
   constructor() {
-    // Initialize Wormhole SDK
-    this.wormhole = new Wormhole("Mainnet", [evm.Platform], {
-      chains: this.buildChainConfig()
-    });
-
+    // Wormhole will be initialized when transfer is requested with RPCs
+    // No more default initialization with hardcoded endpoints
+    this.wormhole = null as any; // Will be set in initiateTransfer
+    
     // Initialize signer wallet - try multiple env var names for compatibility
     const privateKey = process.env.SAFE_MODULE_OWNER_PRIVATE_KEY || 
                       process.env.PRIVATE_KEY || 
@@ -42,31 +41,24 @@ export class BridgeService {
     this.dbService = new RebalanceDbService();
   }
 
-  private buildChainConfig(customRpcs?: { source?: string; dest?: string; sourceChain?: string; destChain?: string }): any {
+  private buildChainConfig(rpcs: { source: string; dest: string; sourceChain: string; destChain: string }): any {
     const config: any = { chains: {} };
     
-    for (const [chain, chainConfig] of Object.entries(CHAIN_CONFIGS)) {
-      if (chainConfig) {
-        let rpcUrl = chainConfig.rpc;
-        
-        // Override with custom RPC if provided for this chain
-        if (customRpcs) {
-          if (customRpcs.sourceChain === chain && customRpcs.source) {
-            rpcUrl = customRpcs.source;
-            console.log(`[Bridge] Using custom RPC for ${chain}: ${rpcUrl.substring(0, 30)}...`);
-          } else if (customRpcs.destChain === chain && customRpcs.dest) {
-            rpcUrl = customRpcs.dest;
-            console.log(`[Bridge] Using custom RPC for ${chain}: ${rpcUrl.substring(0, 30)}...`);
-          }
-        }
-        
-        // Also check environment variables as fallback
-        const envKey = `${chain.toUpperCase()}_RPC`;
-        const envRpc = process.env[envKey];
-        if (envRpc && !customRpcs) {
-          rpcUrl = envRpc;
-        }
-        
+    // Build config for all supported chains
+    for (const chain of Object.keys(CHAIN_IDS)) {
+      // Use provided RPCs for source and destination chains
+      let rpcUrl = "";
+      
+      if (rpcs.sourceChain === chain) {
+        rpcUrl = rpcs.source;
+        console.log(`[Bridge] Setting RPC for source chain ${chain}: ${rpcUrl.substring(0, 40)}...`);
+      } else if (rpcs.destChain === chain) {
+        rpcUrl = rpcs.dest;
+        console.log(`[Bridge] Setting RPC for dest chain ${chain}: ${rpcUrl.substring(0, 40)}...`);
+      }
+      // For other chains, we don't set an RPC (they won't be used in this transfer)
+      
+      if (rpcUrl) {
         config.chains[chain] = {
           rpc: rpcUrl
         };
@@ -83,20 +75,28 @@ export class BridgeService {
     const sourceChain = this.normalizeChainName(request.sourceChain);
     const destinationChain = this.normalizeChainName(request.destinationChain);
     
-    // If custom RPCs are provided, reinitialize Wormhole with custom config
-    if (request.sourceRpcUrl || request.destRpcUrl) {
-      console.log('[Bridge] Reinitializing Wormhole with custom RPCs...');
-      const customConfig = this.buildChainConfig({
-        source: request.sourceRpcUrl,
-        dest: request.destRpcUrl,
-        sourceChain: sourceChain,
-        destChain: destinationChain
-      });
-      
-      this.wormhole = new Wormhole("Mainnet", [evm.Platform], {
-        chains: customConfig.chains
-      });
+    // REQUIRE RPCs to be provided - no more fallbacks to rate-limited endpoints
+    if (!request.sourceRpcUrl || !request.destRpcUrl) {
+      const error = `[Bridge] ERROR: RPCs must be provided. Missing: ${!request.sourceRpcUrl ? 'sourceRpcUrl' : ''} ${!request.destRpcUrl ? 'destRpcUrl' : ''}`;
+      console.error(error);
+      throw new Error('RPCs must be provided by the caller. Use the RPC service to get healthy endpoints.');
     }
+    
+    console.log('[Bridge] Using provided RPCs:');
+    console.log(`[Bridge]   Source (${sourceChain}): ${request.sourceRpcUrl.substring(0, 50)}...`);
+    console.log(`[Bridge]   Dest (${destinationChain}): ${request.destRpcUrl.substring(0, 50)}...`);
+    
+    const customConfig = this.buildChainConfig({
+      source: request.sourceRpcUrl,
+      dest: request.destRpcUrl,
+      sourceChain: sourceChain,
+      destChain: destinationChain
+    });
+    
+    this.wormhole = new Wormhole("Mainnet", [evm.Platform], {
+      chains: customConfig.chains
+    });
+    console.log('[Bridge] Wormhole initialized with provided RPCs');
     
     // Create transfer record
     const transfer: Transfer = {
@@ -181,7 +181,7 @@ export class BridgeService {
         console.log(`[Bridge] Using RPC for Safe transaction: ${rpcUrl.substring(0, 30)}...`);
         
         const result = await this.proposeBundledSafeTransaction(
-          CHAIN_CONFIGS[src.chain]!.chainId,
+          CHAIN_IDS[src.chain],
           request.safeAddress,
           transactions,
           this.signerWallet,
@@ -288,19 +288,18 @@ export class BridgeService {
       
       console.log(`[Bridge] Transaction confirmed on source chain`);
       
-      // For NTT transfers, they complete instantly when executed
-      // No need to wait for VAA - the transfer is already complete
-      transfer.status = TransferStatus.COMPLETED;
-      transfer.completedAt = new Date();
-      console.log(`[Bridge] Transfer ${transferId} completed successfully`);
-      console.log(`[Bridge] BRZ has been transferred to ${transfer.destinationChain}`);
+      // Transaction is confirmed on source chain, but bridge is still processing
+      // Wormhole takes time to complete the actual bridge
+      transfer.status = TransferStatus.EXECUTING;
+      console.log(`[Bridge] Transfer ${transferId} is now executing on Wormhole network`);
+      console.log(`[Bridge] Waiting for Wormhole validators to complete the bridge...`);
       
-      // Update database
+      // Update database to EXECUTING status
       try {
         const executedTxHash = transfer.executedTxHashes && transfer.executedTxHashes.length > 0 
           ? transfer.executedTxHashes[0] 
           : undefined;
-        await this.dbService.updateTransferStatus(transferId, TransferStatus.COMPLETED, undefined, executedTxHash);
+        await this.dbService.updateTransferStatus(transferId, TransferStatus.EXECUTING, undefined, executedTxHash);
       } catch (dbError) {
         console.error('[Bridge] Error updating transfer status in database:', dbError);
       }
@@ -308,18 +307,17 @@ export class BridgeService {
     } catch (error: any) {
       console.error(`[Bridge] Error monitoring transfer ${transferId}:`, error);
       
-      // If we can't verify, but know it was executed, mark as completed
+      // If we can't verify, but know it was executed, mark as executing
       if (error.message.includes('could not be found')) {
-        console.log(`[Bridge] Transaction not found, but was executed - marking as completed`);
-        transfer.status = TransferStatus.COMPLETED;
-        transfer.completedAt = new Date();
+        console.log(`[Bridge] Transaction not found, but was executed - marking as executing`);
+        transfer.status = TransferStatus.EXECUTING;
         
         // Update database
         try {
           const executedTxHash = transfer.executedTxHashes && transfer.executedTxHashes.length > 0 
             ? transfer.executedTxHashes[0] 
             : undefined;
-          await this.dbService.updateTransferStatus(transferId, TransferStatus.COMPLETED, undefined, executedTxHash);
+          await this.dbService.updateTransferStatus(transferId, TransferStatus.EXECUTING, undefined, executedTxHash);
         } catch (dbError) {
           console.error('[Bridge] Error updating transfer status in database:', dbError);
         }
@@ -359,7 +357,67 @@ export class BridgeService {
   }
 
   async getTransferStatus(transferId: string): Promise<Transfer | null> {
-    return this.transfers.get(transferId) || null;
+    const transfer = this.transfers.get(transferId);
+    if (!transfer) return null;
+    
+    // If transfer is still executing, check Wormhole status
+    if (transfer.status === TransferStatus.EXECUTING && transfer.executedTxHashes.length > 0) {
+      const updated = await this.checkWormholeStatus(transfer);
+      if (updated) {
+        this.transfers.set(transferId, updated);
+        return updated;
+      }
+    }
+    
+    return transfer;
+  }
+  
+  private async checkWormholeStatus(transfer: Transfer): Promise<Transfer | null> {
+    try {
+      const txHash = transfer.executedTxHashes[0];
+      console.log(`[Bridge] Checking Wormhole status for tx: ${txHash}`);
+      
+      // Check with Wormholescan API
+      const axios = (await import('axios')).default;
+      const response = await axios.get(
+        `https://api.wormholescan.io/api/v1/operations?txHash=${txHash}`,
+        {
+          timeout: 10000,
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'BRZ-Bridge-Service/1.0'
+          }
+        }
+      );
+      
+      if (response.data && response.data.operations && response.data.operations.length > 0) {
+        const operation = response.data.operations[0];
+        
+        // Check if target chain has completed
+        if (operation.targetChain && operation.targetChain.status === 'completed') {
+          console.log(`[Bridge] Wormhole transfer completed on destination chain`);
+          transfer.status = TransferStatus.COMPLETED;
+          transfer.completedAt = new Date();
+          
+          // Update database
+          try {
+            await this.dbService.updateTransferStatus(transfer.id, TransferStatus.COMPLETED, undefined, txHash);
+          } catch (dbError) {
+            console.error('[Bridge] Error updating transfer status in database:', dbError);
+          }
+          
+          return transfer;
+        } else if (operation.sourceChain && operation.sourceChain.status === 'confirmed') {
+          // Source is confirmed but target not yet - still executing
+          console.log(`[Bridge] Wormhole transfer still executing...`);
+          return transfer;
+        }
+      }
+    } catch (error: any) {
+      console.error(`[Bridge] Error checking Wormhole status:`, error.message);
+    }
+    
+    return null;
   }
 
   async getRecentTransfers(filters: {
@@ -478,7 +536,7 @@ export class BridgeService {
   }
 
   getSupportedChains(): string[] {
-    return Object.keys(CHAIN_CONFIGS);
+    return Object.keys(CHAIN_IDS);
   }
 
   private generateTransferId(): string {
