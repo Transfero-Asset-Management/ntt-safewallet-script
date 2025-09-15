@@ -270,9 +270,11 @@ export class BridgeService {
       console.log(`[Bridge] Monitoring transfer ${transferId}, tx: ${lastTxHash}`);
       
       // First check if the transaction was successful
-      const { JsonRpcProvider } = await import('ethers');
-      const srcProvider = new JsonRpcProvider(
-        this.wormhole.config.chains[transfer.sourceChain]?.rpc
+      const { createProviderWithRetry } = await import('../utils/rpc-retry');
+      const srcProvider = await createProviderWithRetry(
+        this.wormhole.config.chains[transfer.sourceChain]?.rpc || '',
+        3,
+        2000
       );
       
       const receipt = await srcProvider.getTransactionReceipt(lastTxHash);

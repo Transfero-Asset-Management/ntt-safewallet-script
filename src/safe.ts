@@ -1,6 +1,7 @@
 import { Wallet, JsonRpcProvider } from "ethers";
 import SafeApiKit from '@safe-global/api-kit'
 import Safe from '@safe-global/protocol-kit'
+import { createProviderWithRetry } from './utils/rpc-retry'
 import {
     MetaTransactionData,
     OperationType
@@ -16,7 +17,8 @@ export async function proposeTransaction(
     signerWallet: Wallet,
     rpcUrl: string
 ): Promise<{ safeTxHash: string; txHash: string | undefined }> {
-    const provider = new JsonRpcProvider(rpcUrl);
+    // Use provider with retry logic for better reliability
+    const provider = await createProviderWithRetry(rpcUrl, 3, 2000);
     const apiKit = getSafeApiKit(chainId);
 
     const protocolKitOwner = await Safe.init({
@@ -151,7 +153,8 @@ export async function proposeBundledTransaction(
     signerWallet: Wallet,
     rpcUrl: string
 ): Promise<{safeTxHash: string, executed: boolean, executionTxHash?: string}> {
-    const provider = new JsonRpcProvider(rpcUrl);
+    // Use provider with retry logic for better reliability
+    const provider = await createProviderWithRetry(rpcUrl, 3, 2000);
     const apiKit = getSafeApiKit(chainId);
 
     // Force refresh Safe state by not using any cache
