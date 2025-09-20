@@ -20,8 +20,8 @@ export async function createProviderWithRetry(
 
       // Create provider with increased timeout
       const provider = new JsonRpcProvider(rpcUrl, undefined, {
-        staticNetwork: true, // Skip network detection on initialization
-        timeout: 30000 // 30 second timeout
+        staticNetwork: true // Skip network detection on initialization
+        // Note: timeout is not a valid option for JsonRpcApiProviderOptions
       });
 
       // Try to get the network to verify connection
