@@ -43,21 +43,35 @@ export class BridgeService {
 
   private buildChainConfig(rpcs: { source: string; dest: string; sourceChain: string; destChain: string }): any {
     const config: any = { chains: {} };
-    
+
     // Build config for all supported chains
     for (const chain of Object.keys(CHAIN_IDS)) {
       // Use provided RPCs for source and destination chains
       let rpcUrl = "";
-      
+
       if (rpcs.sourceChain === chain) {
-        rpcUrl = rpcs.source;
-        console.log(`[Bridge] Setting RPC for source chain ${chain}: ${rpcUrl.substring(0, 40)}...`);
+        // Force proper RPC for Unichain if it's using DRPC
+        if (chain === 'Unichain' && rpcs.source.includes('drpc.org')) {
+          // Override with a better RPC for Unichain
+          rpcUrl = process.env.UNICHAIN_RPC || 'https://mainnet.unichain.org';
+          console.log(`[Bridge] Overriding Unichain RPC (was DRPC): ${rpcUrl.substring(0, 40)}...`);
+        } else {
+          rpcUrl = rpcs.source;
+          console.log(`[Bridge] Setting RPC for source chain ${chain}: ${rpcUrl.substring(0, 40)}...`);
+        }
       } else if (rpcs.destChain === chain) {
-        rpcUrl = rpcs.dest;
-        console.log(`[Bridge] Setting RPC for dest chain ${chain}: ${rpcUrl.substring(0, 40)}...`);
+        // Force proper RPC for Unichain if it's using DRPC
+        if (chain === 'Unichain' && rpcs.dest.includes('drpc.org')) {
+          // Override with a better RPC for Unichain
+          rpcUrl = process.env.UNICHAIN_RPC || 'https://mainnet.unichain.org';
+          console.log(`[Bridge] Overriding Unichain RPC (was DRPC): ${rpcUrl.substring(0, 40)}...`);
+        } else {
+          rpcUrl = rpcs.dest;
+          console.log(`[Bridge] Setting RPC for dest chain ${chain}: ${rpcUrl.substring(0, 40)}...`);
+        }
       }
       // For other chains, we don't set an RPC (they won't be used in this transfer)
-      
+
       if (rpcUrl) {
         config.chains[chain] = {
           rpc: rpcUrl
@@ -80,6 +94,16 @@ export class BridgeService {
       const error = `[Bridge] ERROR: RPCs must be provided. Missing: ${!request.sourceRpcUrl ? 'sourceRpcUrl' : ''} ${!request.destRpcUrl ? 'destRpcUrl' : ''}`;
       console.error(error);
       throw new Error('RPCs must be provided by the caller. Use the RPC service to get healthy endpoints.');
+    }
+
+    // Force proper RPC for Unichain to avoid DRPC batch limits
+    if (sourceChain === 'Unichain' && request.sourceRpcUrl.includes('drpc.org')) {
+      request.sourceRpcUrl = process.env.UNICHAIN_RPC || 'https://mainnet.unichain.org';
+      console.log('[Bridge] Forcing Unichain source RPC to avoid DRPC batch limits');
+    }
+    if (destinationChain === 'Unichain' && request.destRpcUrl.includes('drpc.org')) {
+      request.destRpcUrl = process.env.UNICHAIN_RPC || 'https://mainnet.unichain.org';
+      console.log('[Bridge] Forcing Unichain dest RPC to avoid DRPC batch limits');
     }
     
     console.log('[Bridge] Using provided RPCs:');
@@ -244,18 +268,52 @@ export class BridgeService {
         message
       };
     } catch (error: any) {
+      // Detect specific RPC errors that should mark transactions as failed immediately
+      let shouldMarkAsFailed = false;
+      let errorReason = error.message;
+
+      // Check for DRPC batch limit errors (similar to LiFi's bad request detection)
+      if (error.message?.includes('Batch of more than') ||
+          error.message?.includes('drpc.org') ||
+          error.info?.error?.message?.includes('Batch of more than')) {
+        shouldMarkAsFailed = true;
+        errorReason = 'RPC Error: DRPC batch limit exceeded. Please use a different RPC for Unichain.';
+        console.error('[Bridge] DRPC batch limit error detected - marking as failed');
+      }
+
+      // Check for other RPC-related errors
+      if (error.code === 'SERVER_ERROR' ||
+          error.code === 'NETWORK_ERROR' ||
+          error.message?.includes('server response 500') ||
+          error.message?.includes('server response 502') ||
+          error.message?.includes('server response 503')) {
+        shouldMarkAsFailed = true;
+        errorReason = `RPC Error: ${error.code || 'Server error'}. The RPC endpoint is not responding properly.`;
+        console.error('[Bridge] RPC server error detected - marking as failed');
+      }
+
+      // Check for insufficient funds or gas errors
+      if (error.message?.includes('insufficient funds') ||
+          error.message?.includes('gas required exceeds') ||
+          error.code === 'INSUFFICIENT_FUNDS') {
+        shouldMarkAsFailed = true;
+        errorReason = 'Insufficient funds for gas';
+        console.error('[Bridge] Insufficient funds error - marking as failed');
+      }
+
       transfer.status = TransferStatus.FAILED;
-      transfer.error = error.message;
+      transfer.error = errorReason;
       transfer.updatedAt = new Date();
       this.transfers.set(transferId, transfer);
-      
+
       // Save failed transfer to database
       try {
         await this.dbService.saveTransfer(transfer);
+        console.log(`[Bridge] Failed transfer saved to database: ${errorReason}`);
       } catch (dbError) {
         console.error('[Bridge] Error saving failed transfer to database:', dbError);
       }
-      
+
       throw error;
     }
   }
