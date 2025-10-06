@@ -2,15 +2,19 @@ import { Wormhole, amount, Chain } from "@wormhole-foundation/sdk";
 import evm from "@wormhole-foundation/sdk/platforms/evm";
 import { Wallet } from "ethers";
 import "@wormhole-foundation/sdk-evm-ntt";
+import "@wormhole-foundation/sdk-evm-cctp";
+import { CircleTransfer } from "@wormhole-foundation/sdk-connect";
+import { EvmAddress } from "@wormhole-foundation/sdk-evm";
 
 import { NTT_TOKENS, CHAIN_IDS } from "../utils/const";
 import { proposeTransaction } from "../safe";
-import { 
-  TransferRequest, 
-  TransferResult, 
-  TransferStatus, 
+import {
+  TransferRequest,
+  TransferResult,
+  TransferStatus,
   Transfer,
-  BridgeMetrics 
+  BridgeMetrics,
+  CCTPQuoteResult
 } from "../types/bridge.types";
 import { RebalanceDbService } from "./rebalance-db.service";
 
@@ -122,12 +126,16 @@ export class BridgeService {
     });
     console.log('[Bridge] Wormhole initialized with provided RPCs');
     
+    // Determine token (default to BRZ for backward compatibility)
+    const token = request.token || 'BRZ';
+
     // Create transfer record
     const transfer: Transfer = {
       id: transferId,
       sourceChain: sourceChain,
       destinationChain: destinationChain,
       amount: request.amount,
+      token: token,
       safeAddress: request.safeAddress,
       destinationAddress: request.destinationAddress || request.safeAddress,
       safeTxHashes: [],
@@ -147,44 +155,98 @@ export class BridgeService {
       const srcChainAddress = Wormhole.chainAddress(src.chain, request.safeAddress);
       const dstChainAddress = Wormhole.chainAddress(dst.chain, transfer.destinationAddress);
 
-      // Get NTT protocol instance
-      const srcNtt = await src.getProtocol("Ntt", {
-        ntt: NTT_TOKENS[src.chain],
-      });
+      console.log(`[Bridge] Initiating transfer of ${request.amount} ${token} from ${request.sourceChain} to ${request.destinationChain}`);
 
-      // Parse amount
-      const amt = amount.units(
-        amount.parse(request.amount, await srcNtt.getTokenDecimals())
-      );
-
-      console.log(`[Bridge] Initiating transfer of ${request.amount} BRZ from ${request.sourceChain} to ${request.destinationChain}`);
-
-      // Create transfer generator
-      const xfer = () => srcNtt.transfer(srcChainAddress.address, amt, dstChainAddress, {
-        queue: false,
-        automatic: true,
-        gasDropoff: 0n,
-      });
-
-      // Collect all transactions first
+      // Collect transactions based on token type
       const transactions: any[] = [];
-      const txGenerator = xfer();
-      let step = await txGenerator.next();
 
-      while (!step.done) {
-        const transaction = step.value.transaction;
-        transactions.push({
-          to: transaction.to,
-          value: transaction.value ? transaction.value.toString() : "0",
-          data: transaction.data
+      if (token === 'BRZ') {
+        // BRZ uses NTT protocol
+        const srcNtt = await src.getProtocol("Ntt", {
+          ntt: NTT_TOKENS[src.chain],
         });
-        
-        console.log(`[Bridge] Transaction ${transactions.length}:`);
-        console.log(`  To: ${transaction.to}`);
-        console.log(`  Value: ${transaction.value || '0'}`);
-        
-        // Get next transaction
-        step = await txGenerator.next();
+
+        const amt = amount.units(
+          amount.parse(request.amount, await srcNtt.getTokenDecimals())
+        );
+
+        console.log(`[Bridge] Using NTT protocol for BRZ`);
+
+        // Create transfer generator
+        const xfer = () => srcNtt.transfer(srcChainAddress.address, amt, dstChainAddress, {
+          queue: false,
+          automatic: true,
+          gasDropoff: 0n,
+        });
+
+        // Collect NTT transactions
+        const txGenerator = xfer();
+        let step = await txGenerator.next();
+
+        while (!step.done) {
+          const transaction = step.value.transaction;
+          transactions.push({
+            to: transaction.to,
+            value: transaction.value ? transaction.value.toString() : "0",
+            data: transaction.data
+          });
+
+          console.log(`[Bridge] NTT Transaction ${transactions.length}:`);
+          console.log(`  To: ${transaction.to}`);
+          console.log(`  Value: ${transaction.value || '0'}`);
+
+          step = await txGenerator.next();
+        }
+
+      } else if (token === 'USDC' || token === 'USDT') {
+        // USDC/USDT use CCTP protocol
+        // Check if Base is involved (known broken)
+        if (sourceChain === 'Base' || destinationChain === 'Base') {
+          throw new Error('Base CCTP is not supported. Please use LiFi for Base bridges.');
+        }
+
+        console.log(`[Bridge] Using CCTP protocol for ${token}`);
+
+        // Get CCTP protocol instance
+        const srcCctp = await src.getProtocol("AutomaticCircleBridge", {});
+
+        // Parse amount (USDC/USDT have 6 decimals)
+        const amt = BigInt(Math.floor(parseFloat(request.amount) * 1_000_000));
+
+        console.log(`[Bridge] Amount in smallest units: ${amt.toString()}`);
+
+        // Create Safe address for CCTP
+        const safeEvmAddr = new EvmAddress(request.safeAddress);
+        const destEvmAddr = new EvmAddress(transfer.destinationAddress);
+
+        // Create transfer generator
+        const xfer = () => srcCctp.transfer(
+          safeEvmAddr,
+          dstChainAddress as any,
+          amt,
+          0n // no native gas dropoff
+        );
+
+        // Collect CCTP transactions
+        const txGenerator = xfer();
+        let step = await txGenerator.next();
+
+        while (!step.done) {
+          const transaction = step.value.transaction;
+          transactions.push({
+            to: transaction.to,
+            value: transaction.value ? transaction.value.toString() : "0",
+            data: transaction.data
+          });
+
+          console.log(`[Bridge] CCTP Transaction ${transactions.length}:`);
+          console.log(`  To: ${transaction.to}`);
+          console.log(`  Value: ${transaction.value || '0'}`);
+
+          step = await txGenerator.next();
+        }
+      } else {
+        throw new Error(`Unsupported token: ${token}. Supported tokens: BRZ, USDC, USDT`);
       }
 
       console.log(`[Bridge] Total transactions to bundle: ${transactions.length}`);
@@ -593,6 +655,75 @@ export class BridgeService {
     }
 
     return metrics;
+  }
+
+  /**
+   * Get a CCTP quote for USDC/USDT transfer
+   * Returns the relayer fee and expected amounts
+   */
+  async getCCTPQuote(
+    sourceChain: string,
+    destinationChain: string,
+    token: 'USDC' | 'USDT',
+    amount: string,
+    sourceRpcUrl?: string,
+    destRpcUrl?: string
+  ): Promise<CCTPQuoteResult> {
+    // Normalize chain names
+    const srcChain = this.normalizeChainName(sourceChain);
+    const dstChain = this.normalizeChainName(destinationChain);
+
+    // Check if Base is involved (known broken)
+    if (srcChain === 'Base' || dstChain === 'Base') {
+      throw new Error('Base CCTP is not supported. Use LiFi for Base bridges.');
+    }
+
+    // Build config with RPCs if provided
+    if (sourceRpcUrl && destRpcUrl) {
+      const customConfig = this.buildChainConfig({
+        source: sourceRpcUrl,
+        dest: destRpcUrl,
+        sourceChain: srcChain,
+        destChain: dstChain
+      });
+
+      this.wormhole = new Wormhole("Mainnet", [evm.Platform], {
+        chains: customConfig.chains
+      });
+    } else if (!this.wormhole) {
+      // Initialize with defaults if not provided
+      this.wormhole = new Wormhole("Mainnet", [evm.Platform]);
+    }
+
+    const sendChain = this.wormhole.getChain(srcChain);
+    const rcvChain = this.wormhole.getChain(dstChain);
+
+    // Parse amount (USDC/USDT have 6 decimals)
+    const amountBigInt = BigInt(Math.floor(parseFloat(amount) * 1_000_000));
+
+    // Get quote from Wormhole CCTP
+    const quote = await CircleTransfer.quoteTransfer(
+      sendChain,
+      rcvChain,
+      {
+        amount: amountBigInt,
+        automatic: true,
+        nativeGas: 0n
+      }
+    );
+
+    // Convert to our format
+    const relayFeeUSDC = quote.relayFee ? Number(quote.relayFee.amount) / 1_000_000 : 0;
+
+    return {
+      sourceAmount: (Number(quote.sourceToken.amount) / 1_000_000).toString(),
+      destinationAmount: (Number(quote.destinationToken.amount) / 1_000_000).toString(),
+      relayFee: relayFeeUSDC.toString(),
+      relayFeeUSD: relayFeeUSDC, // USDC ≈ $1
+      destinationNativeGas: (quote.destinationNativeGas || 0n).toString(),
+      eta: quote.eta || 10,
+      expires: quote.expires?.toString() || new Date(Date.now() + 300000).toISOString()
+    };
   }
 
   getSupportedChains(): string[] {

@@ -18,6 +18,7 @@ router.post('/transfer', async (req: Request, res: Response, next: Function) => 
       sourceChain: req.body.sourceChain,
       destinationChain: req.body.destinationChain,
       amount: req.body.amount,
+      token: req.body.token || 'BRZ',  // Default to BRZ for backward compatibility
       safeAddress: req.body.safeAddress,
       destinationAddress: req.body.destinationAddress || req.body.safeAddress, // Default to same address
       sourceRpcUrl: req.body.sourceRpcUrl,  // Pass RPC URL if provided

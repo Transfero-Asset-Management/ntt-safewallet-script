@@ -4,6 +4,7 @@ export interface TransferRequest {
   sourceChain: Chain;
   destinationChain: Chain;
   amount: string;
+  token?: 'BRZ' | 'USDC' | 'USDT';  // Token to bridge (default: BRZ)
   safeAddress: string;
   destinationAddress?: string;
   sourceRpcUrl?: string;  // Optional RPC URL for source chain
@@ -33,6 +34,7 @@ export interface Transfer {
   sourceChain: Chain;
   destinationChain: Chain;
   amount: string;
+  token: 'BRZ' | 'USDC' | 'USDT';  // Token being bridged
   safeAddress: string;
   destinationAddress: string;
   safeTxHashes: string[];
@@ -52,4 +54,14 @@ export interface BridgeMetrics {
   failedTransfers: number;
   totalVolumeByChain: Record<string, string>;
   averageTransferTime: number;
+}
+
+export interface CCTPQuoteResult {
+  sourceAmount: string;       // Amount to send
+  destinationAmount: string;   // Amount to receive
+  relayFee: string;           // Relay fee in source token
+  relayFeeUSD: number;        // Relay fee in USD
+  destinationNativeGas: string; // Native gas dropoff
+  eta: number;                 // Estimated time in minutes
+  expires: string;             // Quote expiration time
 }

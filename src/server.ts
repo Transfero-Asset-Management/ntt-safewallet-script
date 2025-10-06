@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { bridgeRoutes } from './routes/bridge.routes';
 import { statusRoutes } from './routes/status.routes';
 import { estimateRoutes } from './routes/estimate.routes';
+import { quoteRoutes } from './routes/quote.routes';
 
 // Load environment variables
 dotenv.config();
@@ -17,16 +18,18 @@ app.use(express.json());
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    service: 'brz-ntt-bridge',
-    timestamp: new Date().toISOString() 
+  res.json({
+    status: 'ok',
+    service: 'wormhole-bridge-service',
+    supports: ['BRZ (NTT)', 'USDC (CCTP)', 'USDT (CCTP)'],
+    timestamp: new Date().toISOString()
   });
 });
 
 // Routes
 app.use('/api/bridge', bridgeRoutes);
-app.use('/api/bridge/estimate', estimateRoutes);
+app.use('/api/bridge/estimate', estimateRoutes);  // NTT (BRZ) estimate
+app.use('/api/bridge/quote', quoteRoutes);         // CCTP (USDC/USDT) quote
 app.use('/api/status', statusRoutes);
 
 // Error handling middleware
