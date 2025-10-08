@@ -57,15 +57,13 @@ async function getUnichainGasConfig(provider: JsonRpcProvider): Promise<GasConfi
       };
     }
   } catch (error) {
-    console.warn('[GasConfig] Could not get block data for Unichain:', error);
+    console.error('[GasConfig] Failed to get block data for Unichain:', error);
+    // Fail fast - no fallbacks for gas prices to avoid incorrect cost estimation
+    throw new Error(`Failed to fetch Unichain gas prices: ${error}`);
   }
 
-  // Fallback for Unichain - use conservative defaults
-  console.log('[GasConfig] Using fallback gas prices for Unichain');
-  return {
-    maxFeePerGas: BigInt(5000000000), // 5 gwei (Unichain is typically cheap)
-    maxPriorityFeePerGas: BigInt(1500000000), // 1.5 gwei
-  };
+  // Should never reach here - if getBlock fails, we throw
+  throw new Error('Failed to get Unichain gas configuration');
 }
 
 /**
@@ -85,8 +83,11 @@ export async function getOptimizedGasConfig(provider: JsonRpcProvider): Promise<
     const feeData = await provider.getFeeData();
 
     if (!feeData.maxFeePerGas || !feeData.maxPriorityFeePerGas) {
-      // Fallback for networks that don't support EIP-1559
-      const gasPrice = feeData.gasPrice || BigInt(20000000000); // 20 gwei default
+      // For networks that don't support EIP-1559, use legacy gasPrice
+      if (!feeData.gasPrice) {
+        throw new Error('No gas price data available from provider (neither EIP-1559 nor legacy)');
+      }
+      const gasPrice = feeData.gasPrice;
       return {
         maxFeePerGas: gasPrice * BigInt(150) / BigInt(100), // 50% buffer
         maxPriorityFeePerGas: gasPrice * BigInt(110) / BigInt(100), // 10% buffer
@@ -112,10 +113,7 @@ export async function getOptimizedGasConfig(provider: JsonRpcProvider): Promise<
     }
 
     console.error('[GasConfig] Error getting fee data:', error);
-    // Return safe defaults
-    return {
-      maxFeePerGas: BigInt(50000000000), // 50 gwei
-      maxPriorityFeePerGas: BigInt(2000000000), // 2 gwei
-    };
+    // Fail fast - no fallbacks for gas prices to avoid incorrect cost estimation
+    throw new Error(`Failed to fetch gas prices: ${error}`);
   }
 }
