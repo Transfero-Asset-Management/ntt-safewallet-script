@@ -157,6 +157,36 @@ export async function proposeBundledTransaction(
     const provider = await createProviderWithRetry(rpcUrl, 3, 2000);
     const apiKit = getSafeApiKit(chainId);
 
+    // Check Safe balance BEFORE proposing transaction
+    console.log(`[NTTService] Checking Safe balance before proposing transaction...`);
+    const safeBalance = await provider.getBalance(safeAddress);
+    const safeBalanceEth = Number(safeBalance) / 1e18;
+    console.log(`[NTTService] Safe balance: ${safeBalance.toString()} wei (${safeBalanceEth.toFixed(6)} native token)`);
+
+    // Calculate total value required (sum of all transaction values + gas estimate)
+    const totalValue = transactions.reduce((sum, tx) => sum + BigInt(tx.value || '0'), BigInt(0));
+    const totalValueEth = Number(totalValue) / 1e18;
+    console.log(`[NTTService] Total value required for transactions: ${totalValue.toString()} wei (${totalValueEth.toFixed(6)} native token)`);
+
+    // Estimate gas cost (approximate)
+    const estimatedGasCost = BigInt('500000') * BigInt('400000000000'); // 500k gas * 400 gwei
+    const estimatedGasCostEth = Number(estimatedGasCost) / 1e18;
+    console.log(`[NTTService] Estimated gas cost: ${estimatedGasCost.toString()} wei (${estimatedGasCostEth.toFixed(6)} native token)`);
+
+    const totalRequired = totalValue + estimatedGasCost;
+    const totalRequiredEth = Number(totalRequired) / 1e18;
+    console.log(`[NTTService] Total required (value + gas): ${totalRequired.toString()} wei (${totalRequiredEth.toFixed(6)} native token)`);
+
+    if (safeBalance < totalRequired) {
+        const deficit = totalRequired - safeBalance;
+        const deficitEth = Number(deficit) / 1e18;
+        const errorMessage = `Insufficient Safe balance: has ${safeBalanceEth.toFixed(6)}, needs ${totalRequiredEth.toFixed(6)} (deficit: ${deficitEth.toFixed(6)} native token)`;
+        console.error(`[NTTService] ❌ ${errorMessage}`);
+        throw new Error(errorMessage);
+    }
+
+    console.log(`[NTTService] ✅ Safe has sufficient balance`);
+
     // Force refresh Safe state by not using any cache
     const protocolKitOwner = await Safe.init({
         provider: rpcUrl,
