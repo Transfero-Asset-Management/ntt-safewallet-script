@@ -96,79 +96,42 @@ router.post('/', async (req: Request, res: Response, next: Function) => {
       amount.parse(transferAmount, await srcNtt.getTokenDecimals())
     );
 
-    // Create transfer generator to get transaction details WITHOUT executing
-    const xfer = () => srcNtt.transfer(srcChainAddress.address, amt, dstChainAddress, {
+    // Get the actual relay fee quote from Wormhole
+    // This is the fee we PAY to Wormhole (sent as transaction value)
+    console.log(`[Estimate] Requesting actual relay fee quote from Wormhole...`);
+    const relayFee = await srcNtt.quoteDeliveryPrice(dstChain, {
       queue: false,
       automatic: true,
       gasDropoff: 0n,
     });
 
-    // Collect transaction details to calculate fees
-    const transactions: any[] = [];
-    let totalRelayFee = BigInt(0); // Keep for logging, but won't use in estimate
-    const txGenerator = xfer();
-    let step = await txGenerator.next();
-
-    while (!step.done) {
-      const transaction = step.value.transaction;
-
-      // The value field contains the relay fee in native token (for logging only)
-      if (transaction.value) {
-        totalRelayFee += BigInt(transaction.value);
-      }
-
-      transactions.push({
-        to: transaction.to,
-        value: transaction.value ? transaction.value.toString() : "0",
-        data: transaction.data ? transaction.data.substring(0, 10) : "0x" // Just log first 10 chars of data
-      });
-
-      step = await txGenerator.next();
-    }
-
-    console.log(`[Estimate] Found ${transactions.length} transaction(s)`);
-    console.log(`[Estimate] SDK relay fee (ignored): ${totalRelayFee.toString()} wei`);
+    console.log(`[Estimate] Wormhole relay fee: ${relayFee.toString()} wei`);
 
     // Get native token info
     const nativeTokenSymbol = getNativeToken(srcChain);
 
-    // FOR BRZ BRIDGES: We only pay source chain gas, NOT the relay fee
-    // The Wormhole relayer covers destination gas
-    // Estimate: ~200k gas for Safe + NTT transfer on source chain
-    const estimatedGasUnits = BigInt(200000) * BigInt(transactions.length);
+    // Format the relay fee for response
+    const relayFeeFormatted = formatRelayFee(relayFee, srcChain);
 
-    // Estimate gas cost based on typical gas prices per chain
-    // These are conservative estimates for source chain execution
-    const gasEstimates: Record<string, bigint> = {
-      'Polygon': BigInt('40000000000000000'), // ~0.04 POL
-      'Base': BigInt('50000000000000'), // ~0.00005 ETH
-      'Arbitrum': BigInt('50000000000000'), // ~0.00005 ETH
-      'Avalanche': BigInt('40000000000000000'), // ~0.04 AVAX
-      'Bsc': BigInt('8000000000000000'), // ~0.008 BNB
-      'Unichain': BigInt('50000000000000') // ~0.00005 ETH
-    };
+    console.log(`[Estimate] Relay fee: ${relayFeeFormatted} ${nativeTokenSymbol}`);
 
-    const estimatedGasCost = gasEstimates[srcChain] || BigInt('50000000000000'); // Default fallback
-    const estimatedFeeFormatted = formatRelayFee(estimatedGasCost, srcChain);
-
-    console.log(`[Estimate] Estimated gas cost (source only): ${estimatedGasCost.toString()} wei (${estimatedFeeFormatted} ${nativeTokenSymbol})`);
-
+    // Return the relay fee
+    // NOTE: This is just the Wormhole relay fee
+    // The caller should add actual source chain gas costs from historical data
     res.json({
       success: true,
-      estimatedFee: estimatedFeeFormatted, // Now returns only gas estimate, not relay fee
-      maxFee: (Number(estimatedFeeFormatted) * 1.5).toFixed(6), // 50% buffer for gas price fluctuations
+      estimatedFee: relayFeeFormatted, // Wormhole relay fee in native token
+      maxFee: (Number(relayFeeFormatted) * 1.2).toFixed(6), // 20% buffer
       nativeToken: nativeTokenSymbol,
-      gasEstimate: estimatedGasUnits.toString(),
-      transactionCount: transactions.length,
-      relayFeeWei: estimatedGasCost.toString(), // Now contains gas estimate, not SDK relay fee
-      note: 'BRZ bridges: Only source chain gas cost is estimated. Wormhole relayer covers destination gas.',
+      gasEstimate: relayFee.toString(), // Relay fee in wei
+      transactionCount: 1,
+      relayFeeWei: relayFee.toString(), // Relay fee in wei
+      note: 'This is the Wormhole relay fee only. Actual gas cost should be added from historical execution data.',
       details: {
         sourceChain: srcChain,
         destinationChain: dstChain,
         amount: transferAmount,
-        safeAddress: safeAddress,
-        transactions: transactions,
-        sdkRelayFeeIgnored: totalRelayFee.toString() // For debugging
+        safeAddress: safeAddress
       }
     });
 

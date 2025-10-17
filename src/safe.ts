@@ -302,22 +302,61 @@ export async function proposeBundledTransaction(
     
     if (thresholdNumber === 1 && owners.includes(senderAddress)) {
         console.log(`[NTTService] Threshold is 1 and signer is owner. Will execute transaction...`);
-        
+
+        // Check executor wallet balance BEFORE attempting execution
+        console.log(`[NTTService] ═══ Pre-Execution Balance Checks ═══`);
+        try {
+            const executorBalance = await provider.getBalance(senderAddress);
+            const executorBalanceNative = Number(executorBalance) / 1e18;
+            console.log(`[NTTService] 💳 Executor wallet: ${senderAddress}`);
+            console.log(`[NTTService] 💰 Executor balance: ${executorBalance.toString()} wei (${executorBalanceNative.toFixed(6)} native token)`);
+
+            const safeBalance = await provider.getBalance(safeAddress);
+            const safeBalanceNative = Number(safeBalance) / 1e18;
+            console.log(`[NTTService] 🏦 Safe address: ${safeAddress}`);
+            console.log(`[NTTService] 💰 Safe balance: ${safeBalance.toString()} wei (${safeBalanceNative.toFixed(6)} native token)`);
+
+            // Get gas config first to estimate cost
+            const gasConfig = await getOptimizedGasConfig(provider);
+            const gasLimit = BigInt('500000');
+            const maxFeePerGas = gasConfig.maxFeePerGas ? BigInt(gasConfig.maxFeePerGas) : BigInt('400000000000');
+            const maxGasCost = gasLimit * maxFeePerGas;
+            const maxGasCostNative = Number(maxGasCost) / 1e18;
+
+            console.log(`[NTTService] ⛽ Estimated max gas cost: ${maxGasCost.toString()} wei (${maxGasCostNative.toFixed(6)} native token)`);
+            console.log(`[NTTService]    - Gas limit: ${gasLimit.toString()}`);
+            console.log(`[NTTService]    - Max fee per gas: ${Number(maxFeePerGas) / 1e9} gwei`);
+
+            if (executorBalance < maxGasCost) {
+                const deficit = maxGasCost - executorBalance;
+                const deficitNative = Number(deficit) / 1e18;
+                const errorMsg = `Executor wallet has insufficient gas! Has ${executorBalanceNative.toFixed(6)}, needs ${maxGasCostNative.toFixed(6)}, deficit: ${deficitNative.toFixed(6)} native token. Please fund: ${senderAddress}`;
+                console.error(`[NTTService] ❌ ${errorMsg}`);
+                throw new Error(errorMsg);
+            }
+
+            console.log(`[NTTService] ✅ Executor wallet has sufficient gas for execution`);
+            console.log(`[NTTService] ═══════════════════════════════════`);
+        } catch (balanceCheckError: any) {
+            console.error(`[NTTService] ❌ Balance check failed:`, balanceCheckError.message);
+            throw balanceCheckError;
+        }
+
         // Wait for the Safe service to fully index the transaction
         console.log(`[NTTService] Waiting 5 seconds for Safe service to fully process the transaction...`);
         await new Promise(resolve => setTimeout(resolve, 5000));
-        
+
         console.log(`[NTTService] Executing transaction now...`);
-        
+
         try {
             // Get optimized gas configuration
             const gasConfig = await getOptimizedGasConfig(provider);
-            
+
             console.log(`[NTTService] Gas configuration:`);
             console.log(`[NTTService]   - maxFeePerGas: ${gasConfig.maxFeePerGas ? (Number(gasConfig.maxFeePerGas) / 1e9).toFixed(2) : 'not set'} gwei`);
             console.log(`[NTTService]   - maxPriorityFeePerGas: ${gasConfig.maxPriorityFeePerGas ? (Number(gasConfig.maxPriorityFeePerGas) / 1e9).toFixed(2) : 'not set'} gwei`);
             console.log(`[NTTService]   - gasLimit: ${gasConfig.gasLimit || 'auto'}`);
-            
+
             // Execute the transaction with gas configuration
             // Add a reasonable gas limit if not set
             const executionOptions: any = {};
@@ -329,7 +368,7 @@ export async function proposeBundledTransaction(
             }
             // Set a reasonable gas limit for Safe execution
             executionOptions.gasLimit = '500000';
-            
+
             console.log(`[NTTService] Executing transaction with options:`, executionOptions);
             
             const executeTxResponse = await protocolKitOwner.executeTransaction(safeTransaction, executionOptions);
@@ -362,17 +401,49 @@ export async function proposeBundledTransaction(
             }
         } catch (error: any) {
             console.error(`[NTTService] Failed to execute transaction:`, error.message || error);
-            
-            // Check Safe balance before execution
+            console.error(`[NTTService] Error code:`, error.code || 'none');
+            console.error(`[NTTService] Error stack:`, error.stack || 'none');
+
+            // Check BOTH Safe and executor wallet balances
             try {
+                // Check Safe balance
                 const safeBalance = await provider.getBalance(safeAddress);
-                console.log(`[NTTService] Safe balance: ${safeBalance.toString()} wei (${Number(safeBalance) / 1e18} ETH)`);
-                
+                const safeBalanceNative = Number(safeBalance) / 1e18;
+                console.log(`[NTTService] 💰 Safe balance: ${safeBalance.toString()} wei (${safeBalanceNative.toFixed(6)} native token)`);
+
+                // Check executor wallet balance (the wallet that pays gas)
+                const executorBalance = await provider.getBalance(senderAddress);
+                const executorBalanceNative = Number(executorBalance) / 1e18;
+                console.log(`[NTTService] 💳 Executor wallet balance: ${executorBalance.toString()} wei (${executorBalanceNative.toFixed(6)} native token)`);
+                console.log(`[NTTService] 👤 Executor wallet address: ${senderAddress}`);
+
+                // Calculate required gas
+                const gasLimit = BigInt(executionOptions.gasLimit || '500000');
+                const maxFeePerGas = BigInt(executionOptions.maxFeePerGas || '400000000000'); // 400 gwei default
+                const maxGasCost = gasLimit * maxFeePerGas;
+                const maxGasCostNative = Number(maxGasCost) / 1e18;
+                console.log(`[NTTService] ⛽ Max gas cost: ${maxGasCost.toString()} wei (${maxGasCostNative.toFixed(6)} native token)`);
+                console.log(`[NTTService]    - Gas limit: ${gasLimit.toString()}`);
+                console.log(`[NTTService]    - Max fee per gas: ${maxFeePerGas.toString()} wei (${Number(maxFeePerGas) / 1e9} gwei)`);
+
+                // Check if executor wallet has enough
+                if (executorBalance < maxGasCost) {
+                    const deficit = maxGasCost - executorBalance;
+                    const deficitNative = Number(deficit) / 1e18;
+                    console.error(`[NTTService] ❌ EXECUTOR WALLET INSUFFICIENT GAS!`);
+                    console.error(`[NTTService]    Executor has: ${executorBalanceNative.toFixed(6)} native token`);
+                    console.error(`[NTTService]    Max gas cost: ${maxGasCostNative.toFixed(6)} native token`);
+                    console.error(`[NTTService]    Deficit: ${deficitNative.toFixed(6)} native token`);
+                    console.error(`[NTTService]    Please fund executor wallet at: ${senderAddress}`);
+                } else {
+                    console.log(`[NTTService] ✅ Executor wallet has sufficient gas`);
+                }
+
                 if (safeBalance === BigInt(0)) {
                     console.error(`[NTTService] ⚠️ Safe has no native token for gas! Please fund the Safe at ${safeAddress}`);
                 }
             } catch (balanceError) {
-                console.error(`[NTTService] Could not check Safe balance:`, balanceError);
+                console.error(`[NTTService] Could not check balances:`, balanceError);
             }
             
             // Check for specific Safe error codes
