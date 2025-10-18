@@ -157,35 +157,11 @@ export async function proposeBundledTransaction(
     const provider = await createProviderWithRetry(rpcUrl, 3, 2000);
     const apiKit = getSafeApiKit(chainId);
 
-    // Check Safe balance BEFORE proposing transaction
-    console.log(`[NTTService] Checking Safe balance before proposing transaction...`);
-    const safeBalance = await provider.getBalance(safeAddress);
-    const safeBalanceEth = Number(safeBalance) / 1e18;
-    console.log(`[NTTService] Safe balance: ${safeBalance.toString()} wei (${safeBalanceEth.toFixed(6)} native token)`);
+    // Get network name for better error messages
+    const networkName = getNetworkName(chainId);
+    const nativeTokenName = getNativeTokenName(chainId);
 
-    // Calculate total value required (sum of all transaction values + gas estimate)
-    const totalValue = transactions.reduce((sum, tx) => sum + BigInt(tx.value || '0'), BigInt(0));
-    const totalValueEth = Number(totalValue) / 1e18;
-    console.log(`[NTTService] Total value required for transactions: ${totalValue.toString()} wei (${totalValueEth.toFixed(6)} native token)`);
-
-    // Estimate gas cost (approximate)
-    const estimatedGasCost = BigInt('500000') * BigInt('400000000000'); // 500k gas * 400 gwei
-    const estimatedGasCostEth = Number(estimatedGasCost) / 1e18;
-    console.log(`[NTTService] Estimated gas cost: ${estimatedGasCost.toString()} wei (${estimatedGasCostEth.toFixed(6)} native token)`);
-
-    const totalRequired = totalValue + estimatedGasCost;
-    const totalRequiredEth = Number(totalRequired) / 1e18;
-    console.log(`[NTTService] Total required (value + gas): ${totalRequired.toString()} wei (${totalRequiredEth.toFixed(6)} native token)`);
-
-    if (safeBalance < totalRequired) {
-        const deficit = totalRequired - safeBalance;
-        const deficitEth = Number(deficit) / 1e18;
-        const errorMessage = `Insufficient Safe balance: has ${safeBalanceEth.toFixed(6)}, needs ${totalRequiredEth.toFixed(6)} (deficit: ${deficitEth.toFixed(6)} native token)`;
-        console.error(`[NTTService] ❌ ${errorMessage}`);
-        throw new Error(errorMessage);
-    }
-
-    console.log(`[NTTService] ✅ Safe has sufficient balance`);
+    console.log(`[NTTService] [${networkName}] Preparing transaction for Safe: ${safeAddress}`);
 
     // Force refresh Safe state by not using any cache
     const protocolKitOwner = await Safe.init({
@@ -304,17 +280,17 @@ export async function proposeBundledTransaction(
         console.log(`[NTTService] Threshold is 1 and signer is owner. Will execute transaction...`);
 
         // Check executor wallet balance BEFORE attempting execution
-        console.log(`[NTTService] ═══ Pre-Execution Balance Checks ═══`);
+        console.log(`[NTTService] [${networkName}] ═══ Pre-Execution Balance Checks ═══`);
         try {
             const executorBalance = await provider.getBalance(senderAddress);
             const executorBalanceNative = Number(executorBalance) / 1e18;
-            console.log(`[NTTService] 💳 Executor wallet: ${senderAddress}`);
-            console.log(`[NTTService] 💰 Executor balance: ${executorBalance.toString()} wei (${executorBalanceNative.toFixed(6)} native token)`);
+            console.log(`[NTTService] [${networkName}] 💳 Executor wallet: ${senderAddress}`);
+            console.log(`[NTTService] [${networkName}] 💰 Executor balance: ${executorBalance.toString()} wei (${executorBalanceNative.toFixed(6)} ${nativeTokenName})`);
 
             const safeBalance = await provider.getBalance(safeAddress);
             const safeBalanceNative = Number(safeBalance) / 1e18;
-            console.log(`[NTTService] 🏦 Safe address: ${safeAddress}`);
-            console.log(`[NTTService] 💰 Safe balance: ${safeBalance.toString()} wei (${safeBalanceNative.toFixed(6)} native token)`);
+            console.log(`[NTTService] [${networkName}] 🏦 Safe address: ${safeAddress}`);
+            console.log(`[NTTService] [${networkName}] 💰 Safe balance: ${safeBalance.toString()} wei (${safeBalanceNative.toFixed(6)} ${nativeTokenName})`);
 
             // Get gas config first to estimate cost
             const gasConfig = await getOptimizedGasConfig(provider);
@@ -323,22 +299,22 @@ export async function proposeBundledTransaction(
             const maxGasCost = gasLimit * maxFeePerGas;
             const maxGasCostNative = Number(maxGasCost) / 1e18;
 
-            console.log(`[NTTService] ⛽ Estimated max gas cost: ${maxGasCost.toString()} wei (${maxGasCostNative.toFixed(6)} native token)`);
-            console.log(`[NTTService]    - Gas limit: ${gasLimit.toString()}`);
-            console.log(`[NTTService]    - Max fee per gas: ${Number(maxFeePerGas) / 1e9} gwei`);
+            console.log(`[NTTService] [${networkName}] ⛽ Estimated max gas cost: ${maxGasCost.toString()} wei (${maxGasCostNative.toFixed(6)} ${nativeTokenName})`);
+            console.log(`[NTTService] [${networkName}]    - Gas limit: ${gasLimit.toString()}`);
+            console.log(`[NTTService] [${networkName}]    - Max fee per gas: ${Number(maxFeePerGas) / 1e9} gwei`);
 
             if (executorBalance < maxGasCost) {
                 const deficit = maxGasCost - executorBalance;
                 const deficitNative = Number(deficit) / 1e18;
-                const errorMsg = `Executor wallet has insufficient gas! Has ${executorBalanceNative.toFixed(6)}, needs ${maxGasCostNative.toFixed(6)}, deficit: ${deficitNative.toFixed(6)} native token. Please fund: ${senderAddress}`;
+                const errorMsg = `[${networkName}] Executor wallet ${senderAddress} has insufficient gas! Has ${executorBalanceNative.toFixed(6)} ${nativeTokenName}, needs ${maxGasCostNative.toFixed(6)} ${nativeTokenName}, deficit: ${deficitNative.toFixed(6)} ${nativeTokenName}`;
                 console.error(`[NTTService] ❌ ${errorMsg}`);
                 throw new Error(errorMsg);
             }
 
-            console.log(`[NTTService] ✅ Executor wallet has sufficient gas for execution`);
-            console.log(`[NTTService] ═══════════════════════════════════`);
+            console.log(`[NTTService] [${networkName}] ✅ Executor wallet has sufficient gas for execution`);
+            console.log(`[NTTService] [${networkName}] ═══════════════════════════════════`);
         } catch (balanceCheckError: any) {
-            console.error(`[NTTService] ❌ Balance check failed:`, balanceCheckError.message);
+            console.error(`[NTTService] [${networkName}] ❌ Balance check failed:`, balanceCheckError.message);
             throw balanceCheckError;
         }
 
@@ -347,6 +323,9 @@ export async function proposeBundledTransaction(
         await new Promise(resolve => setTimeout(resolve, 5000));
 
         console.log(`[NTTService] Executing transaction now...`);
+
+        // Declare execution options outside try block so it's available in catch
+        let executionOptions: any;
 
         try {
             // Get optimized gas configuration
@@ -359,7 +338,7 @@ export async function proposeBundledTransaction(
 
             // Execute the transaction with gas configuration
             // Add a reasonable gas limit if not set
-            const executionOptions: any = {};
+            executionOptions = {};
             if (gasConfig.maxFeePerGas) {
                 executionOptions.maxFeePerGas = gasConfig.maxFeePerGas.toString();
             }
@@ -565,4 +544,32 @@ function getSafeApiKit(chainId: number) {
         chainId: BigInt(chainId),
         txServiceUrl: txServiceUrl
     });
+}
+
+function getNetworkName(chainId: number): string {
+    const chainIdToNetwork: Record<number, string> = {
+        1: 'Ethereum',
+        137: 'Polygon',
+        42161: 'Arbitrum',
+        43114: 'Avalanche',
+        8453: 'Base',
+        56: 'BSC',
+        130: 'Unichain',
+        1284: 'Moonbeam'
+    };
+    return chainIdToNetwork[chainId] || `Chain ${chainId}`;
+}
+
+function getNativeTokenName(chainId: number): string {
+    const chainIdToToken: Record<number, string> = {
+        1: 'ETH',
+        137: 'POL',
+        42161: 'ETH',
+        43114: 'AVAX',
+        8453: 'ETH',
+        56: 'BNB',
+        130: 'ETH',
+        1284: 'GLMR'
+    };
+    return chainIdToToken[chainId] || 'native token';
 }
