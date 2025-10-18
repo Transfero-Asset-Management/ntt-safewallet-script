@@ -40,15 +40,21 @@ async function getUnichainGasConfig(provider: JsonRpcProvider): Promise<GasConfi
     if (block && block.baseFeePerGas) {
       // EIP-1559 network - calculate fees based on base fee
       const baseFee = block.baseFeePerGas;
-      // Use a reasonable priority fee for Unichain
-      const maxPriorityFeePerGas = BigInt(1000000000); // 1 gwei
+
+      // ✅ FIX: Use dynamic priority fee based on base fee, NOT hardcoded 1 gwei
+      // Unichain has extremely low gas (< 0.000001 gwei typically)
+      // Use 10% of base fee as priority, with minimum of 1 wei to avoid zero
+      const maxPriorityFeePerGas = baseFee > BigInt(10)
+        ? baseFee / BigInt(10)  // 10% of base fee
+        : BigInt(1);            // Minimum 1 wei
+
       // Set max fee to 2x base fee plus priority fee
       const maxFeePerGas = baseFee * BigInt(2) + maxPriorityFeePerGas;
 
       console.log(`[GasConfig] Unichain gas prices from block:`);
-      console.log(`  - Base fee: ${(Number(baseFee) / 1e9).toFixed(3)} gwei`);
-      console.log(`  - Max priority fee: ${(Number(maxPriorityFeePerGas) / 1e9).toFixed(3)} gwei`);
-      console.log(`  - Max fee: ${(Number(maxFeePerGas) / 1e9).toFixed(3)} gwei`);
+      console.log(`  - Base fee: ${(Number(baseFee) / 1e9).toFixed(9)} gwei`);
+      console.log(`  - Max priority fee: ${(Number(maxPriorityFeePerGas) / 1e9).toFixed(9)} gwei (dynamic: 10% of base)`);
+      console.log(`  - Max fee: ${(Number(maxFeePerGas) / 1e9).toFixed(9)} gwei`);
 
       // Add buffer to prevent failures
       return {
