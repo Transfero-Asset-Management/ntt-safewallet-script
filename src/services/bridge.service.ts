@@ -673,11 +673,6 @@ export class BridgeService {
     const srcChain = this.normalizeChainName(sourceChain);
     const dstChain = this.normalizeChainName(destinationChain);
 
-    // Check if Base is involved (known broken)
-    if (srcChain === 'Base' || dstChain === 'Base') {
-      throw new Error('Base CCTP is not supported. Use LiFi for Base bridges.');
-    }
-
     // Build config with RPCs if provided
     if (sourceRpcUrl && destRpcUrl) {
       const customConfig = this.buildChainConfig({
