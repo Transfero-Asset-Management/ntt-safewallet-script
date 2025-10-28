@@ -199,12 +199,7 @@ export class BridgeService {
         }
 
       } else if (token === 'USDC' || token === 'USDT') {
-        // USDC/USDT use CCTP protocol
-        // Check if Base is involved (known broken)
-        if (sourceChain === 'Base' || destinationChain === 'Base') {
-          throw new Error('Base CCTP is not supported. Please use LiFi for Base bridges.');
-        }
-
+        // USDC/USDT use CCTP protocol (Wormhole supports Base and Unichain)
         console.log(`[Bridge] Using CCTP protocol for ${token}`);
 
         // Get CCTP protocol instance

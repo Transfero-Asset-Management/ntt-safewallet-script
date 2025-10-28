@@ -59,15 +59,6 @@ router.post('/', async (req: Request, res: Response, next: Function) => {
   } catch (error: any) {
     console.error('[Quote] Error:', error);
 
-    // Handle specific errors
-    if (error.message?.includes('Base CCTP')) {
-      return res.status(400).json({
-        success: false,
-        error: error.message,
-        suggestion: 'Use LiFi for Base chain bridges'
-      });
-    }
-
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to get CCTP quote'
