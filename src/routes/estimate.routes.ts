@@ -87,9 +87,9 @@ router.post('/', async (req: Request, res: Response, next: Function) => {
     const dstChainAddress = Wormhole.chainAddress(dst.chain, safeAddress);
 
     // Get NTT protocol instance
-    const srcNtt = await src.getProtocol("Ntt", {
+    const srcNtt = await src.getProtocol("Ntt" as any, {
       ntt: NTT_TOKENS[src.chain],
-    });
+    }) as any;
 
     // Parse amount
     const amt = amount.units(

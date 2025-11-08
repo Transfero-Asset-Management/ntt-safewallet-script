@@ -1,5 +1,5 @@
-import { Wormhole, amount, Chain } from "@wormhole-foundation/sdk";
-import evm from "@wormhole-foundation/sdk/platforms/evm";
+import { Wormhole, wormhole, amount, Chain } from "@wormhole-foundation/sdk";
+import evm from "@wormhole-foundation/sdk/evm";
 import { Wallet } from "ethers";
 import "@wormhole-foundation/sdk-evm-ntt";
 import "@wormhole-foundation/sdk-evm-cctp";
@@ -121,7 +121,7 @@ export class BridgeService {
       destChain: destinationChain
     });
     
-    this.wormhole = new Wormhole("Mainnet", [evm.Platform], {
+    this.wormhole = await wormhole("Mainnet", [evm], {
       chains: customConfig.chains
     });
     console.log('[Bridge] Wormhole initialized with provided RPCs');
@@ -162,9 +162,9 @@ export class BridgeService {
 
       if (token === 'BRZ') {
         // BRZ uses NTT protocol
-        const srcNtt = await src.getProtocol("Ntt", {
+        const srcNtt = await src.getProtocol("Ntt" as any, {
           ntt: NTT_TOKENS[src.chain],
-        });
+        }) as any;
 
         const amt = amount.units(
           amount.parse(request.amount, await srcNtt.getTokenDecimals())
@@ -211,8 +211,8 @@ export class BridgeService {
         console.log(`[Bridge] Amount in smallest units: ${amt.toString()}`);
 
         // Create Safe address for CCTP
-        const safeEvmAddr = new EvmAddress(request.safeAddress);
-        const destEvmAddr = new EvmAddress(transfer.destinationAddress);
+        const safeEvmAddr = new EvmAddress(request.safeAddress) as any;
+        const destEvmAddr = new EvmAddress(transfer.destinationAddress) as any;
 
         // Create transfer generator
         const xfer = () => srcCctp.transfer(
@@ -677,12 +677,13 @@ export class BridgeService {
         destChain: dstChain
       });
 
-      this.wormhole = new Wormhole("Mainnet", [evm.Platform], {
+      // Use wormhole() function instead of new Wormhole() to properly register CCTP
+      this.wormhole = await wormhole("Mainnet", [evm], {
         chains: customConfig.chains
       });
     } else if (!this.wormhole) {
       // Initialize with defaults if not provided
-      this.wormhole = new Wormhole("Mainnet", [evm.Platform]);
+      this.wormhole = await wormhole("Mainnet", [evm]);
     }
 
     const sendChain = this.wormhole.getChain(srcChain);
@@ -692,9 +693,10 @@ export class BridgeService {
     const amountBigInt = BigInt(Math.floor(parseFloat(amount) * 1_000_000));
 
     // Get quote from Wormhole CCTP
+    // Type assertion needed due to SDK version incompatibilities
     const quote = await CircleTransfer.quoteTransfer(
-      sendChain,
-      rcvChain,
+      sendChain as any,
+      rcvChain as any,
       {
         amount: amountBigInt,
         automatic: true,
@@ -705,11 +707,30 @@ export class BridgeService {
     // Convert to our format
     const relayFeeUSDC = quote.relayFee ? Number(quote.relayFee.amount) / 1_000_000 : 0;
 
+    // Calculate actual fee from source vs destination difference
+    const sourceAmount = Number(quote.sourceToken.amount) / 1_000_000;
+    const destAmount = Number(quote.destinationToken.amount) / 1_000_000;
+    const actualFeeFromDiff = sourceAmount - destAmount;
+
+    console.log(`[CCTP Quote] Full quote details:`, JSON.stringify({
+      sourceAmount: quote.sourceToken.amount.toString(),
+      destAmount: quote.destinationToken.amount.toString(),
+      relayFee: quote.relayFee ? quote.relayFee.amount.toString() : 'null',
+      destinationNativeGas: quote.destinationNativeGas?.toString(),
+      eta: quote.eta
+    }, null, 2));
+    console.log(`[CCTP Quote] SDK relay fee: $${relayFeeUSDC.toFixed(4)}`);
+    console.log(`[CCTP Quote] Actual fee (source - dest): $${actualFeeFromDiff.toFixed(4)}`);
+    console.log(`[CCTP Quote] Source: ${sourceAmount} USDC, Dest: ${destAmount} USDC`);
+
+    // Use the actual difference as the real cost
+    const realRelayFee = actualFeeFromDiff > 0 ? actualFeeFromDiff : relayFeeUSDC;
+
     return {
-      sourceAmount: (Number(quote.sourceToken.amount) / 1_000_000).toString(),
-      destinationAmount: (Number(quote.destinationToken.amount) / 1_000_000).toString(),
-      relayFee: relayFeeUSDC.toString(),
-      relayFeeUSD: relayFeeUSDC, // USDC ≈ $1
+      sourceAmount: sourceAmount.toString(),
+      destinationAmount: destAmount.toString(),
+      relayFee: realRelayFee.toString(),
+      relayFeeUSD: realRelayFee,
       destinationNativeGas: (quote.destinationNativeGas || 0n).toString(),
       eta: quote.eta || 10,
       expires: quote.expires?.toString() || new Date(Date.now() + 300000).toISOString()

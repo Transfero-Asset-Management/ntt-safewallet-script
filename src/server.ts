@@ -6,6 +6,9 @@ import { statusRoutes } from './routes/status.routes';
 import { estimateRoutes } from './routes/estimate.routes';
 import { quoteRoutes } from './routes/quote.routes';
 
+// Import CCTP protocol support (must be at top level)
+import "@wormhole-foundation/sdk-evm-cctp";
+
 // Load environment variables
 dotenv.config();
 

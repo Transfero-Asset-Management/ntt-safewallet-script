@@ -75,9 +75,9 @@ function parseArgs() {
   }
   const signerWallet = new Wallet(privateKey);
 
-  const srcNtt = await src.getProtocol("Ntt", {
+  const srcNtt = await src.getProtocol("Ntt" as any, {
     ntt: NTT_TOKENS[src.chain],
-  });
+  }) as any;
 
   const amt = amount.units(
     amount.parse(transferAmount, await srcNtt.getTokenDecimals())

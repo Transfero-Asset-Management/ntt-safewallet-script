@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+// Import CCTP support BEFORE BridgeService to ensure protocol registration
+import "@wormhole-foundation/sdk-evm-cctp";
 import { BridgeService } from '../services/bridge.service';
 
 const router = Router();

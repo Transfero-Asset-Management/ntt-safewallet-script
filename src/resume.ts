@@ -19,9 +19,9 @@ import { getSigner } from "./utils/helpers";
   const dstSigner = await getSigner(dst);
 
   // Set up destination NTT protocol
-  const dstNtt = await dst.getProtocol("Ntt", {
+  const dstNtt = await dst.getProtocol("Ntt" as any, {
     ntt: NTT_TOKENS[dst.chain],
-  });
+  }) as any;
 
   // TODO: Replace with the actual Wormhole transaction ID
   const stuckTxId = "YOUR_TRANSACTION_ID_HERE";
@@ -29,7 +29,7 @@ import { getSigner } from "./utils/helpers";
   // Get the VAA
   const vaa = await wh.getVaa(
     stuckTxId,
-    "Ntt:WormholeTransfer",
+    "Ntt:WormholeTransfer" as any,
     25 * 60 * 1000
   );
   console.log(vaa);
