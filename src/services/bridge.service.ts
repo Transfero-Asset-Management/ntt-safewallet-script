@@ -1,10 +1,12 @@
-import { Wormhole, wormhole, amount, Chain } from "@wormhole-foundation/sdk";
+import { Wormhole, wormhole, amount, Chain, routes } from "@wormhole-foundation/sdk";
 import evm from "@wormhole-foundation/sdk/evm";
 import { Wallet } from "ethers";
 import "@wormhole-foundation/sdk-evm-ntt";
 import "@wormhole-foundation/sdk-evm-cctp";
 import { CircleTransfer } from "@wormhole-foundation/sdk-connect";
 import { EvmAddress } from "@wormhole-foundation/sdk-evm";
+import { nttExecutorRoute, NttExecutorRoute } from "@wormhole-foundation/sdk-route-ntt";
+import { NttWithExecutor } from "@wormhole-foundation/sdk-definitions-ntt";
 
 import { NTT_TOKENS, CHAIN_IDS } from "../utils/const";
 import { proposeTransaction } from "../safe";
@@ -86,6 +88,72 @@ export class BridgeService {
     return config;
   }
 
+  /**
+   * Convert NTT_TOKENS to executor route config format
+   */
+  private buildExecutorConfig(): NttExecutorRoute.Config {
+    const tokens = Object.entries(NTT_TOKENS)
+      .filter(([_, contracts]) => contracts !== undefined)
+      .map(([chain, contracts]) => ({
+        chain: chain as Chain,
+        token: contracts!.token,
+        manager: contracts!.manager,
+        transceiver: Object.entries(contracts!.transceiver).map(([type, address]) => ({
+          type: type as "wormhole",
+          address: address as string,
+        })),
+      }));
+
+    return {
+      ntt: {
+        tokens: {
+          "BRZ": tokens
+        }
+      },
+      referrerFee: {
+        feeDbps: 0n, // No referrer fee
+      }
+    };
+  }
+
+  /**
+   * Fetch executor quote for NTT transfer
+   */
+  private async fetchExecutorQuote(
+    sourceChain: Chain,
+    destChain: Chain,
+    amountStr: string
+  ): Promise<NttWithExecutor.Quote> {
+    const executorConfig = this.buildExecutorConfig();
+    const executorRoute = nttExecutorRoute(executorConfig);
+    // Cast wormhole to any to handle SDK version type mismatches
+    const routeInstance = new executorRoute(this.wormhole as any);
+
+    const srcTokenAddr = NTT_TOKENS[sourceChain]!.token;
+    const dstTokenAddr = NTT_TOKENS[destChain]!.token;
+
+    // Create transfer request
+    const tr = await routes.RouteTransferRequest.create(this.wormhole, {
+      source: Wormhole.tokenId(sourceChain, srcTokenAddr),
+      destination: Wormhole.tokenId(destChain, dstTokenAddr),
+    });
+
+    // Validate parameters
+    const validated = await routeInstance.validate(tr, { amount: amountStr });
+    if (!validated.valid) {
+      throw new Error(`Executor validation failed: ${validated.error?.message || 'Unknown error'}`);
+    }
+
+    // Get quote from executor
+    const quote = await routeInstance.fetchExecutorQuote(tr, validated.params as NttExecutorRoute.ValidatedParams);
+
+    console.log(`[Bridge] Executor quote received:`);
+    console.log(`  Estimated cost: ${quote.estimatedCost.toString()} wei`);
+    console.log(`  Expires: ${quote.expires.toISOString()}`);
+
+    return quote;
+  }
+
   async initiateTransfer(request: TransferRequest): Promise<TransferResult> {
     const transferId = this.generateTransferId();
     
@@ -161,8 +229,15 @@ export class BridgeService {
       const transactions: any[] = [];
 
       if (token === 'BRZ') {
-        // BRZ uses NTT protocol
+        // BRZ uses NTT protocol with Executor (new system replacing Standard Relayer)
+        console.log(`[Bridge] Using NTT protocol with Executor for BRZ`);
+
+        // Get both Ntt and NttWithExecutor protocols
         const srcNtt = await src.getProtocol("Ntt" as any, {
+          ntt: NTT_TOKENS[src.chain],
+        }) as any;
+
+        const srcNttExecutor = await src.getProtocol("NttWithExecutor" as any, {
           ntt: NTT_TOKENS[src.chain],
         }) as any;
 
@@ -170,14 +245,22 @@ export class BridgeService {
           amount.parse(request.amount, await srcNtt.getTokenDecimals())
         );
 
-        console.log(`[Bridge] Using NTT protocol for BRZ`);
+        // Fetch executor quote (replaces quoteDeliveryPrice from Standard Relayer)
+        console.log(`[Bridge] Fetching executor quote...`);
+        const executorQuote = await this.fetchExecutorQuote(
+          sourceChain,
+          destinationChain,
+          request.amount
+        );
 
-        // Create transfer generator
-        const xfer = () => srcNtt.transfer(srcChainAddress.address, amt, dstChainAddress, {
-          queue: false,
-          automatic: true,
-          gasDropoff: 0n,
-        });
+        // Create transfer generator using executor
+        const xfer = () => srcNttExecutor.transfer(
+          srcChainAddress.address,
+          dstChainAddress,
+          amt,
+          executorQuote,
+          srcNtt
+        );
 
         // Collect NTT transactions
         const txGenerator = xfer();
@@ -191,7 +274,7 @@ export class BridgeService {
             data: transaction.data
           });
 
-          console.log(`[Bridge] NTT Transaction ${transactions.length}:`);
+          console.log(`[Bridge] NTT Executor Transaction ${transactions.length}:`);
           console.log(`  To: ${transaction.to}`);
           console.log(`  Value: ${transaction.value || '0'}`);
 

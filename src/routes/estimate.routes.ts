@@ -1,14 +1,43 @@
 import { Router, Request, Response } from 'express';
-import { Wormhole, amount, Chain } from "@wormhole-foundation/sdk";
+import { Wormhole, Chain, routes } from "@wormhole-foundation/sdk";
 import evm from "@wormhole-foundation/sdk/platforms/evm";
 import "@wormhole-foundation/sdk-evm-ntt";
+import { nttExecutorRoute, NttExecutorRoute } from "@wormhole-foundation/sdk-route-ntt";
 import { NTT_TOKENS, CHAIN_IDS } from "../utils/const";
 
 const router = Router();
 
 /**
+ * Build executor config from NTT_TOKENS
+ */
+function buildExecutorConfig(): NttExecutorRoute.Config {
+  const tokens = Object.entries(NTT_TOKENS)
+    .filter(([_, contracts]) => contracts !== undefined)
+    .map(([chain, contracts]) => ({
+      chain: chain as Chain,
+      token: contracts!.token,
+      manager: contracts!.manager,
+      transceiver: Object.entries(contracts!.transceiver).map(([type, address]) => ({
+        type: type as "wormhole",
+        address: address as string,
+      })),
+    }));
+
+  return {
+    ntt: {
+      tokens: {
+        "BRZ": tokens
+      }
+    },
+    referrerFee: {
+      feeDbps: 0n, // No referrer fee
+    }
+  };
+}
+
+/**
  * POST /api/bridge/estimate
- * Get an estimate for a bridge transfer including exact relay fees
+ * Get an estimate for a bridge transfer using Executor quotes
  */
 router.post('/', async (req: Request, res: Response, next: Function) => {
   try {
@@ -21,7 +50,7 @@ router.post('/', async (req: Request, res: Response, next: Function) => {
       });
     }
 
-    console.log(`[Estimate] Getting quote for ${transferAmount} BRZ from ${sourceChain} to ${destinationChain}`);
+    console.log(`[Estimate] Getting executor quote for ${transferAmount} BRZ from ${sourceChain} to ${destinationChain}`);
 
     // Normalize chain names
     const normalizeChainName = (chainName: string): Chain => {
@@ -48,12 +77,12 @@ router.post('/', async (req: Request, res: Response, next: Function) => {
       if (!sourceRpc || !destRpc) {
         throw new Error('RPC URLs must be provided for source and destination chains');
       }
-      
+
       const config: any = { chains: {} };
-      
+
       for (const chain of Object.keys(CHAIN_IDS)) {
         let rpcUrl = "";
-        
+
         // Set RPC for source and destination chains
         if (chain === srcChain) {
           rpcUrl = sourceRpc;
@@ -62,7 +91,7 @@ router.post('/', async (req: Request, res: Response, next: Function) => {
           rpcUrl = destRpc;
           console.log(`[Estimate] Using RPC for dest ${chain}: ${rpcUrl.substring(0, 40)}...`);
         }
-        
+
         // Only add chains with RPCs
         if (rpcUrl) {
           config.chains[chain] = {
@@ -70,7 +99,7 @@ router.post('/', async (req: Request, res: Response, next: Function) => {
           };
         }
       }
-      
+
       return config;
     };
 
@@ -79,54 +108,53 @@ router.post('/', async (req: Request, res: Response, next: Function) => {
       chains: buildChainConfig(sourceRpcUrl, destRpcUrl).chains
     });
 
-    // Get chain instances
-    const src = wormhole.getChain(srcChain);
-    const dst = wormhole.getChain(dstChain);
+    // Setup executor route
+    const executorConfig = buildExecutorConfig();
+    const executorRoute = nttExecutorRoute(executorConfig);
+    const routeInstance = new executorRoute(wormhole as any);
 
-    const srcChainAddress = Wormhole.chainAddress(src.chain, safeAddress);
-    const dstChainAddress = Wormhole.chainAddress(dst.chain, safeAddress);
+    // Create transfer request
+    const srcTokenAddr = NTT_TOKENS[srcChain]!.token;
+    const dstTokenAddr = NTT_TOKENS[dstChain]!.token;
 
-    // Get NTT protocol instance
-    const srcNtt = await src.getProtocol("Ntt" as any, {
-      ntt: NTT_TOKENS[src.chain],
-    }) as any;
-
-    // Parse amount
-    const amt = amount.units(
-      amount.parse(transferAmount, await srcNtt.getTokenDecimals())
-    );
-
-    // Get the actual relay fee quote from Wormhole
-    // This is the fee we PAY to Wormhole (sent as transaction value)
-    console.log(`[Estimate] Requesting actual relay fee quote from Wormhole...`);
-    const relayFee = await srcNtt.quoteDeliveryPrice(dstChain, {
-      queue: false,
-      automatic: true,
-      gasDropoff: 0n,
+    const tr = await routes.RouteTransferRequest.create(wormhole as any, {
+      source: Wormhole.tokenId(srcChain, srcTokenAddr),
+      destination: Wormhole.tokenId(dstChain, dstTokenAddr),
     });
 
-    console.log(`[Estimate] Wormhole relay fee: ${relayFee.toString()} wei`);
+    // Validate parameters
+    const validated = await routeInstance.validate(tr, { amount: transferAmount });
+    if (!validated.valid) {
+      throw new Error(`Executor validation failed: ${validated.error?.message || 'Unknown error'}`);
+    }
+
+    // Get quote from executor (replaces quoteDeliveryPrice from Standard Relayer)
+    console.log(`[Estimate] Fetching executor quote...`);
+    const executorQuote = await routeInstance.fetchExecutorQuote(tr, validated.params as NttExecutorRoute.ValidatedParams);
+
+    console.log(`[Estimate] Executor quote received:`);
+    console.log(`  Estimated cost: ${executorQuote.estimatedCost.toString()} wei`);
+    console.log(`  Expires: ${executorQuote.expires.toISOString()}`);
 
     // Get native token info
     const nativeTokenSymbol = getNativeToken(srcChain);
 
     // Format the relay fee for response
-    const relayFeeFormatted = formatRelayFee(relayFee, srcChain);
+    const relayFeeFormatted = formatRelayFee(executorQuote.estimatedCost, srcChain);
 
-    console.log(`[Estimate] Relay fee: ${relayFeeFormatted} ${nativeTokenSymbol}`);
+    console.log(`[Estimate] Executor fee: ${relayFeeFormatted} ${nativeTokenSymbol}`);
 
-    // Return the relay fee
-    // NOTE: This is just the Wormhole relay fee
-    // The caller should add actual source chain gas costs from historical data
+    // Return the executor quote
     res.json({
       success: true,
-      estimatedFee: relayFeeFormatted, // Wormhole relay fee in native token
+      estimatedFee: relayFeeFormatted, // Executor fee in native token
       maxFee: (Number(relayFeeFormatted) * 1.2).toFixed(6), // 20% buffer
       nativeToken: nativeTokenSymbol,
-      gasEstimate: relayFee.toString(), // Relay fee in wei
+      gasEstimate: executorQuote.estimatedCost.toString(), // Estimated cost in wei
       transactionCount: 1,
-      relayFeeWei: relayFee.toString(), // Relay fee in wei
-      note: 'This is the Wormhole relay fee only. Actual gas cost should be added from historical execution data.',
+      relayFeeWei: executorQuote.estimatedCost.toString(), // Estimated cost in wei
+      expiresAt: executorQuote.expires.toISOString(),
+      note: 'This is the Executor relay fee. Quote expires at the specified time.',
       details: {
         sourceChain: srcChain,
         destinationChain: dstChain,
@@ -163,11 +191,11 @@ function formatRelayFee(feeWei: bigint, chain: string): string {
   const divisor = BigInt(10 ** decimals);
   const wholePart = feeWei / divisor;
   const fractionalPart = feeWei % divisor;
-  
+
   // Format to 6 decimal places
   const fractionalStr = fractionalPart.toString().padStart(decimals, '0').substring(0, 6);
   const formatted = `${wholePart}.${fractionalStr}`;
-  
+
   // Remove trailing zeros
   return parseFloat(formatted).toString();
 }

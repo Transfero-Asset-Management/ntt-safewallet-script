@@ -1,8 +1,9 @@
-import { Wormhole, amount, Chain } from "@wormhole-foundation/sdk";
+import { Wormhole, amount, Chain, routes } from "@wormhole-foundation/sdk";
 import evm from "@wormhole-foundation/sdk/platforms/evm";
 import { Wallet } from "ethers";
 
 import "@wormhole-foundation/sdk-evm-ntt";
+import { nttExecutorRoute, NttExecutorRoute } from "@wormhole-foundation/sdk-route-ntt";
 import { NTT_TOKENS, CHAIN_IDS } from "./utils/const";
 import { proposeTransaction } from "./safe";
 
@@ -25,6 +26,34 @@ function parseArgs() {
   };
 }
 
+/**
+ * Build executor config from NTT_TOKENS
+ */
+function buildExecutorConfig(): NttExecutorRoute.Config {
+  const tokens = Object.entries(NTT_TOKENS)
+    .filter(([_, contracts]) => contracts !== undefined)
+    .map(([chain, contracts]) => ({
+      chain: chain as Chain,
+      token: contracts!.token,
+      manager: contracts!.manager,
+      transceiver: Object.entries(contracts!.transceiver).map(([type, address]) => ({
+        type: type as "wormhole",
+        address: address as string,
+      })),
+    }));
+
+  return {
+    ntt: {
+      tokens: {
+        "BRZ": tokens
+      }
+    },
+    referrerFee: {
+      feeDbps: 0n, // No referrer fee
+    }
+  };
+}
+
 (async function () {
   const { srcChain, dstChain, srcAddress, dstAddress, amount: transferAmount } = parseArgs();
 
@@ -39,7 +68,7 @@ function parseArgs() {
     }
     return rpc;
   };
-  
+
   const wh = new Wormhole("Mainnet", [evm.Platform], {
     "chains": {
       "Base": {
@@ -75,7 +104,12 @@ function parseArgs() {
   }
   const signerWallet = new Wallet(privateKey);
 
+  // Get both Ntt and NttWithExecutor protocols
   const srcNtt = await src.getProtocol("Ntt" as any, {
+    ntt: NTT_TOKENS[src.chain],
+  }) as any;
+
+  const srcNttExecutor = await src.getProtocol("NttWithExecutor" as any, {
     ntt: NTT_TOKENS[src.chain],
   }) as any;
 
@@ -83,11 +117,38 @@ function parseArgs() {
     amount.parse(transferAmount, await srcNtt.getTokenDecimals())
   );
 
-  const xfer = () => srcNtt.transfer(srcChainAddress.address, amt, dstChainAddress, {
-    queue: false,
-    automatic: true,
-    gasDropoff: 0n,
+  // Setup executor route and get quote
+  console.log(`Fetching executor quote...`);
+  const executorConfig = buildExecutorConfig();
+  const executorRoute = nttExecutorRoute(executorConfig);
+  const routeInstance = new executorRoute(wh as any);
+
+  const srcTokenAddr = NTT_TOKENS[srcChain]!.token;
+  const dstTokenAddr = NTT_TOKENS[dstChain]!.token;
+
+  const tr = await routes.RouteTransferRequest.create(wh as any, {
+    source: Wormhole.tokenId(srcChain, srcTokenAddr),
+    destination: Wormhole.tokenId(dstChain, dstTokenAddr),
   });
+
+  const validated = await routeInstance.validate(tr, { amount: transferAmount });
+  if (!validated.valid) {
+    throw new Error(`Executor validation failed: ${validated.error?.message || 'Unknown error'}`);
+  }
+
+  const executorQuote = await routeInstance.fetchExecutorQuote(tr, validated.params as NttExecutorRoute.ValidatedParams);
+  console.log(`Executor quote received:`);
+  console.log(`  Estimated cost: ${executorQuote.estimatedCost.toString()} wei`);
+  console.log(`  Expires: ${executorQuote.expires.toISOString()}`);
+
+  // Create transfer using executor
+  const xfer = () => srcNttExecutor.transfer(
+    srcChainAddress.address,
+    dstChainAddress,
+    amt,
+    executorQuote,
+    srcNtt
+  );
 
   // Iterate through all transactions from xfer() and propose each one
   const txHashes: string[] = [];
